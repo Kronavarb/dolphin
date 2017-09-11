@@ -26,24 +26,32 @@ Force::Force(const std::string& name_) : ControlGroup(name_, GroupType::Force)
   controls.emplace_back(std::make_unique<Input>(_trans("Forward")));
   controls.emplace_back(std::make_unique<Input>(_trans("Backward")));
 
+  numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Range"), 1.0, 0, 500));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Dead Zone"), 0, 0, 50));
 }
 
-void Force::GetState(ControlState* axis)
+void Force::GetState(ControlState* axis, bool step)
 {
   const ControlState deadzone = numeric_settings[0]->GetValue();
 
-  for (u32 i = 0; i < 6; i += 2)
+  for (unsigned int i = 0; i < 3; i++)
   {
-    ControlState tmpf = 0;
-    const ControlState state =
-        controls[i + 1]->control_ref->State() - controls[i]->control_ref->State();
+    double dz = 0;
+    const double state = controls[i * 2 + 1]->control_ref->State() - controls[i * 2]->control_ref->State();
     if (fabs(state) > deadzone)
-      tmpf = ((state - (deadzone * sign(state))) / (1 - deadzone));
+      dz = ((state - (deadzone * sign(state))) / (1 - deadzone));
 
-    ControlState& ax = m_swing[i >> 1];
-    *axis++ = (tmpf - ax);
-    ax = tmpf;
+    if (step)
+    {
+      if (state > m_swing[i])
+        m_swing[i] = std::min(m_swing[i] + 0.1, state);
+      else if (state < m_swing[i])
+        m_swing[i] = std::max(m_swing[i] - 0.1, state);
+    }
+
+    *axis++ = (ControlState)((abs(m_swing[i]) >= 0.7
+      ? -2 * sign(state) + m_swing[i] * 2
+      : m_swing[i]) * sign(state));
   }
 }
 }  // namespace ControllerEmu

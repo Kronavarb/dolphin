@@ -173,7 +173,7 @@ static void DrawControlGroupBox(wxGraphicsContext* gc, ControlGroupBox* g)
       ((ControllerEmu::AnalogStick*)g->control_group)->GetState(&x, &y);
       break;
     case ControllerEmu::GroupType::Tilt:
-      ((ControllerEmu::Tilt*)g->control_group)->GetState(&x, &y);
+      ((ControllerEmu::Tilt*)g->control_group)->GetState(&x, &y, &z); //XXX
       break;
     case ControllerEmu::GroupType::Cursor:
       ((ControllerEmu::Cursor*)g->control_group)->GetState(&x, &y, &z);

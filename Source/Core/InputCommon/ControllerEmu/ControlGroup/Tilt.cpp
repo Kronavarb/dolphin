@@ -17,81 +17,147 @@
 
 namespace ControllerEmu
 {
-Tilt::Tilt(const std::string& name_) : ControlGroup(name_, GroupType::Tilt)
+Tilt::Tilt(const std::string& name_, bool gyro) : m_has_gyro(gyro), ControlGroup(name_, GroupType::Tilt)
 {
   controls.emplace_back(std::make_unique<Input>(_trans("Forward")));
   controls.emplace_back(std::make_unique<Input>(_trans("Backward")));
   controls.emplace_back(std::make_unique<Input>(_trans("Left")));
   controls.emplace_back(std::make_unique<Input>(_trans("Right")));
+  controls.emplace_back(std::make_unique<Input>(_trans("Yaw Left")));
+  controls.emplace_back(std::make_unique<Input>(_trans("Yaw Right")));
 
-  controls.emplace_back(std::make_unique<Input>(_trans("Modifier")));
+   //controls.emplace_back(std::make_unique<Input>(_trans("Modifier")));
+  if (gyro)
+  {
+    controls.emplace_back(std::make_unique<Input>(_trans("Fast")));
+    controls.emplace_back(std::make_unique<Input>(_trans("Acc Range")));
+    controls.emplace_back(std::make_unique<Input>(_trans("Gyro Range 1")));
+    controls.emplace_back(std::make_unique<Input>(_trans("Gyro Range 2")));
+    numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Acc Range"), 1.0, 0, 500));
+    numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Gyro Range"), 1.0, 0, 500));
+    numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Gyro Settle"), 0.25, 0, 9999));
+  }
+  else
+  {
+    controls.emplace_back(std::make_unique<Input>(_trans("Range")));
+    numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Range"), 1.0, 0, 500));
+  }
 
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Dead Zone"), 0, 0, 50));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Circle Stick"), 0));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Angle"), 0.9, 0, 180));
 }
 
-void Tilt::GetState(ControlState* const x, ControlState* const y, const bool step)
+void Tilt::GetState(ControlState* pitch, ControlState* roll, ControlState* yaw, bool gyro, bool step)
 {
-  // this is all a mess
+  ControlState state;
+  ControlState r_acc = controls[m_has_gyro ? T_ACC_RANGE : T_RANGE]->control_ref->State();
+  auto const r_acc_s = numeric_settings[m_has_gyro ? T_ACC_RANGE_S : T_RANGE]->GetValue();
+  auto const deadzone = numeric_settings[m_has_gyro ? T_DEADZONE : T_DEADZONE_N]->GetValue();
+  auto const circle = numeric_settings[m_has_gyro ? T_CIRCLESTICK : T_CIRCLESTICK_N]->GetValue();
+  auto const angle = numeric_settings[m_has_gyro ? T_ANGLE : T_ANGLE_N]->GetValue() / 1.8;
 
-  ControlState yy = controls[0]->control_ref->State() - controls[1]->control_ref->State();
-  ControlState xx = controls[3]->control_ref->State() - controls[2]->control_ref->State();
+  ControlState settle = 0
+    , r_gyro_1 = 1.0
+    , r_gyro_2 = 1.0
+    , r_gyro_s = 1.0;
+  if (m_has_gyro)
+  {
+    r_gyro_1 = controls[T_GYRO_RANGE_1]->control_ref->State();
+    r_gyro_2 = controls[T_GYRO_RANGE_2]->control_ref->State();
+    r_gyro_s = numeric_settings[T_GYRO_RANGE]->GetValue();
+    settle = numeric_settings[T_GYRO_SETTLE]->GetValue();
+  }
 
-  ControlState deadzone = numeric_settings[0]->GetValue();
-  ControlState circle = numeric_settings[1]->GetValue();
-  auto const angle = numeric_settings[2]->GetValue() / 1.8;
-  ControlState m = controls[4]->control_ref->State();
+  for (unsigned int i = 0; i < 3; i++)
+  {
+    state = controls[i * 2 + 1]->control_ref->State() - controls[i * 2]->control_ref->State();
 
-  // deadzone / circle stick code
-  // this section might be all wrong, but its working good enough, I think
+    // deadzone
+    state *= fabs(state)>deadzone
+      ? (fabs(state) - deadzone) / (1.0 - deadzone)
+      : 0.0;
 
-  ControlState ang = atan2(yy, xx);
-  ControlState ang_sin = sin(ang);
-  ControlState ang_cos = cos(ang);
+    if (step)
+    {
+      if (state == m_acc[i])
+        m_settle[i]++;
+      else
+        m_settle[i] = 0;
+
+      // step towards state
+      if (state > m_acc[i])
+        m_acc[i] = std::min(m_acc[i] + 0.1, state);
+      else if (state < m_acc[i])
+        m_acc[i] = std::max(m_acc[i] - 0.1, state);
+
+      // step gyro towards 0
+      if (m_settle[i] > settle * 100.0)
+      {
+        if (0 > m_gyro[i])
+          m_gyro[i] = std::min(m_gyro[i] + 0.05, 0.0);
+        else if (0 < m_gyro[i])
+          m_gyro[i] = std::max(m_gyro[i] - 0.05, 0.0);
+      }
+
+      // step gyro towards state
+      else
+      {
+        if (m_acc[i] > m_gyro[i])
+          m_gyro[i] = std::min(m_gyro[i] + 0.05, m_acc[i]);
+        else if (m_acc[i] < m_gyro[i])
+          m_gyro[i] = std::max(m_gyro[i] - 0.05, m_acc[i]);
+      }
+    }
+  }
+
+  ControlState y = m_acc[0];
+  ControlState x = m_acc[1];
+
+  // circle stick
+  if (circle)
+  {
+    ControlState ang = atan2(y, x);
+    ControlState ang_sin = sin(ang);
+    ControlState ang_cos = cos(ang);
+    ControlState rad = sqrt(x*x + y*y);
 
   // the amt a full square stick would have at current angle
-  ControlState square_full =
-      std::min(ang_sin ? 1 / fabs(ang_sin) : 2, ang_cos ? 1 / fabs(ang_cos) : 2);
+    ControlState square_full = std::min(ang_sin ? 1 / fabs(ang_sin) : 2, ang_cos ? 1 / fabs(ang_cos) : 2);
 
   // the amt a full stick would have that was (user setting circular) at current angle
   // I think this is more like a pointed circle rather than a rounded square like it should be
   ControlState stick_full = (square_full * (1 - circle)) + (circle);
 
-  ControlState dist = sqrt(xx * xx + yy * yy);
+  // dead zone
+  rad = std::max(0.0, rad - deadzone * stick_full);
+  rad /= (1.0 - deadzone);
 
-  // dead zone code
-  dist = std::max(0.0, dist - deadzone * stick_full);
-  dist /= (1 - deadzone);
+  // circle stick
+  ControlState amt = rad / stick_full;
+  rad += (square_full - 1) * amt * circle;
 
-  // circle stick code
-  ControlState amt = dist / stick_full;
-  dist += (square_full - 1) * amt * circle;
-
-  if (m)
-    dist *= 0.5;
-
-  yy = std::max(-1.0, std::min(1.0, ang_sin * dist));
-  xx = std::max(-1.0, std::min(1.0, ang_cos * dist));
-
-  // this is kinda silly here
-  // gui being open will make this happen 2x as fast, o well
-
-  // silly
-  if (step)
-  {
-    if (xx > m_tilt[0])
-      m_tilt[0] = std::min(m_tilt[0] + 0.1, xx);
-    else if (xx < m_tilt[0])
-      m_tilt[0] = std::max(m_tilt[0] - 0.1, xx);
-
-    if (yy > m_tilt[1])
-      m_tilt[1] = std::min(m_tilt[1] + 0.1, yy);
-    else if (yy < m_tilt[1])
-      m_tilt[1] = std::max(m_tilt[1] - 0.1, yy);
+  y = ang_sin * rad;
+  x = ang_cos * rad;
   }
 
-  *y = m_tilt[1] * angle;
-  *x = m_tilt[0] * angle;
+  m_acc[0] = y;
+  m_acc[1] = x;
+
+  if (gyro)
+  {
+    if (!r_gyro_1) r_gyro_1 = 1.0;
+    if (!r_gyro_2) r_gyro_2 = 1.0;
+    *pitch = m_gyro[0] * angle * r_gyro_1 * r_gyro_2 * r_gyro_s;
+    *roll = m_gyro[1] * angle * r_gyro_1 * r_gyro_2 * r_gyro_s;
+    *yaw = m_gyro[2] * angle * r_gyro_1 * r_gyro_2 * r_gyro_s;
+  }
+  else
+  {
+    if (!r_acc) r_acc = 1.0;
+    *pitch = m_acc[0] * angle * r_acc * r_acc_s;
+    *roll = m_acc[1] * angle * r_acc * r_acc_s;
+    *yaw = m_acc[2] * angle * r_acc * r_acc_s;
+  }
 }
 }  // namespace ControllerEmu

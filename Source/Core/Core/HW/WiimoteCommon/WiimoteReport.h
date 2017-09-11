@@ -320,10 +320,27 @@ struct wm_turntable_extension
 };
 static_assert(sizeof(wm_turntable_extension) == 6, "Wrong size");
 
-struct wm_motionplus_data
+struct wm_nc_mp //nunchuk data on motion-plus pass-through
 {
-  // yaw1, roll1, pitch1: Bits 0-7
-  // yaw2, roll2, pitch2: Bits 8-13
+  u8 jx;
+  u8 jy;
+  u8 ax;
+  u8 ay;
+
+  u8 extension_connected : 1; // 1 usually
+  u8 az : 7;
+  u8 dummy : 1; //0 always
+
+  u8 is_mp_data : 1; //0 when nunchuk interleaved data
+  u8 bz : 1;
+  u8 bc : 1;
+  u8 axL : 1; // ls 1, ls0 = 0 by default,
+  u8 ayL : 1;
+  u8 azL : 2;
+};
+ 
+struct wm_motionplus
+{
 
   u8 yaw1;
   u8 roll1;
@@ -332,16 +349,49 @@ struct wm_motionplus_data
   u8 pitch_slow : 1;
   u8 yaw_slow : 1;
   u8 yaw2 : 6;
-
   u8 extension_connected : 1;
+
   u8 roll_slow : 1;
   u8 roll2 : 6;
+  u8 dummy : 1;
 
-  u8 zero : 1;
   u8 is_mp_data : 1;
   u8 pitch2 : 6;
 };
-static_assert(sizeof(wm_motionplus_data) == 6, "Wrong size");
+struct wm_motionplus_calibration
+{
+  u16 pitch : 14;
+  u8 : 2;
+  u16 roll : 14;
+  u8 : 2;
+  u16 yaw : 14;
+  u8 : 2;
+
+  u16 pitch_min : 14;
+  u8 : 2;
+  u16 pitch_max : 14;
+  u8 : 2;
+  u16 roll_min : 14;
+  u8 : 2;
+  u16 roll_max : 14;
+  u8 : 2;
+
+  u16 pitch_slow : 14;
+  u8 : 2;
+  u16 roll_slow : 14;
+  u8 : 2;
+  u16 yaw_slow : 14;
+  u8 : 2;
+
+  u16 pitch_min_slow : 14;
+  u8 : 2;
+  u16 pitch_max_slow : 14;
+  u8 : 2;
+  u16 roll_min_slow : 14;
+  u8 : 2;
+  u16 : 16;
+  u16 : 16;
+};
 
 struct wm_report
 {

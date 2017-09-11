@@ -21,6 +21,18 @@ namespace WiimoteEmu
 enum class NunchukGroup;
 struct ExtensionReg;
 
+/* Default calibration for the nunchuck. It should be written to 0x20 - 0x3f of the
+extension register. 0x80 is the neutral x and y accelerators and 0xb3 is the
+neutral z accelerometer that is adjusted for gravity. */
+static const u8 nunchuck_calibration[] =
+{
+  0x80,0x80,0x80,0x00, // accelerometer x, y, z neutral
+  0x9a,0x9a,0x9a,0x00, //  x, y, z g-force values
+
+  0xff, 0x00, 0x80, 0xff, // 0xff max, 0x00 min, 0x80 = analog stick x and y axis center
+  0x00, 0x80, 0xa1, 0xf6	// checksum on the last two bytes
+};
+
 class Nunchuk : public Attachment
 {
 public:

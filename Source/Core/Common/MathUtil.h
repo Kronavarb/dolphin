@@ -54,6 +54,19 @@ constexpr bool IsPow2(u32 imm)
   return (imm & (imm - 1)) == 0;
 }
 
+inline double Trimrange(double n, double min, double max)
+{
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+inline double trim14(double a)
+{
+  if (a <= 0) return 0;
+  if (a >= 0x3fff) return 0x3fff;
+  return a;
+}
+
 // The most significant bit of the fraction is an is-quiet bit on all architectures we care about.
 
 static const u64 DOUBLE_SIGN = 0x8000000000000000ULL, DOUBLE_EXP = 0x7FF0000000000000ULL,

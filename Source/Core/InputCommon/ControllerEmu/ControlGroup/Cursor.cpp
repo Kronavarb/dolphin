@@ -28,9 +28,12 @@ Cursor::Cursor(const std::string& name_) : ControlGroup(name_, GroupType::Cursor
 
   controls.emplace_back(std::make_unique<Input>(_trans("Forward")));
   controls.emplace_back(std::make_unique<Input>(_trans("Backward")));
+  controls.emplace_back(std::make_unique<Input>("Range"));
   controls.emplace_back(std::make_unique<Input>(_trans("Hide")));
+  controls.emplace_back(std::make_unique<Input>("Show"));
   controls.emplace_back(std::make_unique<Input>(_trans("Recenter")));
 
+  numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Range"), 1.0, 0, 500));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Center"), 0.5));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Width"), 0.5));
   numeric_settings.emplace_back(std::make_unique<NumericSetting>(_trans("Height"), 0.5));
@@ -39,62 +42,78 @@ Cursor::Cursor(const std::string& name_) : ControlGroup(name_, GroupType::Cursor
 }
 
 void Cursor::GetState(ControlState* const x, ControlState* const y, ControlState* const z,
-                      const bool adjusted)
+                      const bool adjusted, const bool relative, const bool step)
 {
-  const ControlState zz = controls[4]->control_ref->State() - controls[5]->control_ref->State();
+  std::lock_guard<std::mutex> lk(m_mutex);
 
-  // silly being here
-  if (zz > m_z)
-    m_z = std::min(m_z + 0.1, zz);
-  else if (zz < m_z)
-    m_z = std::max(m_z - 0.1, zz);
+  // smooth frames
+  const u8 NUM_FRAMES = 10;
+  // absolute conversion range
+  const double ABS_RANGE = .2,
+    // raw input range
+    RAW_RANGE = .1;
 
-  *z = m_z;
+  ControlState r = controls[C_RANGE_MODIFIER]->control_ref->State();
+  if (!r)
+    r = 1.0;
 
-  // hide
-  if (controls[6]->control_ref->State() > 0.5)
+  for (unsigned int i = 0; i<3; i++)
   {
-    *x = 10000;
-    *y = 0;
-  }
-  else
-  {
-    ControlState yy = controls[0]->control_ref->State() - controls[1]->control_ref->State();
-    ControlState xx = controls[3]->control_ref->State() - controls[2]->control_ref->State();
+    //bool is_relative = controls[i * 2 + 1]->control_ref->IsRelative() || controls[i * 2]->control_ref->IsRelative();
+    ControlState state = controls[i * 2 + 1]->control_ref->State() - controls[i * 2]->control_ref->State();
 
-    // adjust cursor according to settings
-    if (adjusted)
-    {
-      xx *= (numeric_settings[1]->GetValue() * 2);
-      yy *= (numeric_settings[2]->GetValue() * 2);
-      yy += (numeric_settings[0]->GetValue() - 0.5);
-    }
+    // change sign
+    if (i == 0)
+      state = -state;
 
-    // relative input
-    if (boolean_settings[0]->GetValue())
-    {
-      const ControlState deadzone = numeric_settings[3]->GetValue();
-      // deadzone to avoid the cursor slowly drifting
-      if (std::abs(xx) > deadzone)
-        m_x = MathUtil::Clamp(m_x + xx * SPEED_MULTIPLIER, -1.0, 1.0);
-      if (std::abs(yy) > deadzone)
-        m_y = MathUtil::Clamp(m_y + yy * SPEED_MULTIPLIER, -1.0, 1.0);
-
-      // recenter
-      if (controls[7]->control_ref->State() > 0.5)
+    // update absolute position
+    //if (is_relative)
+    //{
+      // moving average smooth input
+      m_list[i].push_back(state);
+      double fsum = 0; int j = 0;
+      if (m_list[i].size() > 0)
       {
-        m_x = 0.0;
-        m_y = 0.0;
+        for (std::list<double>::reverse_iterator it = m_list[i].rbegin(); relative ? it != m_list[i].rend() : j < 1; it++, j++)
+          fsum += *it;
+        state = fsum / double(m_list[i].size());
       }
-    }
+    if (m_list[i].size() >= NUM_FRAMES)
+        m_list[i].pop_front();
+
+      // update position
+      m_absolute[i] += state * r * ABS_RANGE;
+
+      m_absolute[i] = MathUtil::Trimrange(m_absolute[i], -1, 1);
+      m_state[i] = m_absolute[i];
+    /*}
     else
     {
-      m_x = xx;
-      m_y = yy;
-    }
+      m_absolute[i] = MathUtil::Trim(state, -1, 1);
+    }*/
 
-    *x = m_x;
-    *y = m_y;
+    //if (relative)
+    //{
+      m_state[i] = (m_absolute[i] - m_last[i]) * RAW_RANGE;
+      if (step)
+        m_last[i] = m_absolute[i];
+    /*}
+    else
+    {
+      m_state[i] = m_absolute[i];
+    }*/
   }
-}
+
+  *y = m_state[0];
+  *x = m_state[1];
+  *z = m_state[2];
+
+    // adjust absolute cursor
+  if (adjusted && !relative)
+  {
+    *x *= (numeric_settings[C_WIDTH]->GetValue() * 2.0);
+    *y *= (numeric_settings[C_HEIGHT]->GetValue() * 2.0);
+    *y += (numeric_settings[C_CENTER]->GetValue() - 0.5);
+  }
+  }
 }  // namespace ControllerEmu

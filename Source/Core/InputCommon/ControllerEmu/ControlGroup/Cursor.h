@@ -13,9 +13,28 @@ namespace ControllerEmu
 class Cursor : public ControlGroup
 {
 public:
+enum
+  {
+    C_UP,
+    C_DOWN,
+    C_LEFT,
+    C_RIGHT,
+    C_FORWARD,
+    C_BACKWARD,
+    C_RANGE_MODIFIER,
+    C_HIDE,
+    C_SHOW,
+  };
+  enum
+  {
+    C_RANGE,
+    C_CENTER,
+    C_WIDTH,
+    C_HEIGHT,
+  };
   explicit Cursor(const std::string& name);
 
-  void GetState(ControlState* x, ControlState* y, ControlState* z, bool adjusted = false);
+  void GetState(ControlState* x, ControlState* y, ControlState* z, bool adjusted = false, const bool relative = false, const bool step = false);
 
 private:
   // This is used to reduce the cursor speed for relative input
@@ -25,5 +44,8 @@ private:
   ControlState m_x = 0.0;
   ControlState m_y = 0.0;
   ControlState m_z = 0.0;
+  std::array<ControlState, 3> m_state{}, m_absolute{}, m_last{};
+  std::list<double> m_list[3];
+  std::mutex m_mutex;
 };
 }  // namespace ControllerEmu

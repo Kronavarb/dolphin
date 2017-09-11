@@ -16,9 +16,9 @@ class Force : public ControlGroup
 public:
   explicit Force(const std::string& name);
 
-  void GetState(ControlState* axis);
+  void GetState(ControlState* axis, bool step = true);
 
 private:
-  std::array<ControlState, 3> m_swing{};
+  std::array<ControlState, 3> m_swing{}, m_state{};
 };
 }  // namespace ControllerEmu
