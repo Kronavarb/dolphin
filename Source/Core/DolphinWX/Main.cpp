@@ -5,7 +5,6 @@
 #include <OptionParser.h>
 #include <cstdio>
 #include <cstring>
-#include <mutex>
 #include <string>
 #include <utility>
 #include <wx/app.h>
@@ -16,6 +15,7 @@
 #include <wx/imagpng.h>
 #include <wx/intl.h>
 #include <wx/language.h>
+#include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/thread.h>
 #include <wx/timer.h>
@@ -31,6 +31,7 @@
 #include "Common/Logging/LogManager.h"
 #include "Common/MsgHandler.h"
 #include "Common/Thread.h"
+#include "Common/Version.h"
 
 #include "Core/Analytics.h"
 #include "Core/ConfigManager.h"
@@ -46,6 +47,7 @@
 #include "DolphinWX/Main.h"
 #include "DolphinWX/NetPlay/NetWindow.h"
 #include "DolphinWX/SoftwareVideoConfigDialog.h"
+#include "DolphinWX/UINeedsControllerState.h"
 #include "DolphinWX/VideoConfigDiag.h"
 #include "DolphinWX/WxUtils.h"
 
@@ -63,12 +65,10 @@
 
 IMPLEMENT_APP(DolphinApp)
 
-bool wxMsgAlert(const char*, const char*, bool, int);
+bool wxMsgAlert(const char*, const char*, bool, MsgType);
 std::string wxStringTranslator(const char*);
 
 CFrame* main_frame = nullptr;
-
-static std::mutex s_init_mutex;
 
 bool DolphinApp::Initialize(int& c, wxChar** v)
 {
@@ -120,7 +120,9 @@ bool DolphinApp::OnInit()
 
   ParseCommandLine();
 
-  std::lock_guard<std::mutex> lk(s_init_mutex);
+#ifdef _WIN32
+  FreeConsole();
+#endif
 
   UICommon::SetUserDirectory(m_user_path.ToStdString());
   UICommon::CreateDirectories();
@@ -142,12 +144,15 @@ bool DolphinApp::OnInit()
   // Enable the PNG image handler for screenshots
   wxImage::AddHandler(new wxPNGHandler);
 
+  // Silent PNG warnings from some homebrew banners: "iCCP: known incorrect sRGB profile"
+  wxImage::SetDefaultLoadFlags(wxImage::GetDefaultLoadFlags() & ~wxImage::Load_Verbose);
+
   // We have to copy the size and position out of SConfig now because CFrame's OnMove
   // handler will corrupt them during window creation (various APIs like SetMenuBar cause
   // event dispatch including WM_MOVE/WM_SIZE)
   wxRect window_geometry(SConfig::GetInstance().iPosX, SConfig::GetInstance().iPosY,
                          SConfig::GetInstance().iWidth, SConfig::GetInstance().iHeight);
-  main_frame = new CFrame(nullptr, wxID_ANY, StrToWxStr(scm_rev_str), window_geometry,
+  main_frame = new CFrame(nullptr, wxID_ANY, StrToWxStr(Common::scm_rev_str), window_geometry,
                           m_use_debugger, m_batch_mode, m_use_logger);
   SetTopWindow(main_frame);
 
@@ -204,9 +209,6 @@ void DolphinApp::MacOpenFile(const wxString& fileName)
 
 void DolphinApp::AfterInit()
 {
-  if (!m_batch_mode)
-    main_frame->UpdateGameList();
-
 #if defined(USE_ANALYTICS) && USE_ANALYTICS
   if (!SConfig::GetInstance().m_analytics_permission_asked)
   {
@@ -256,9 +258,9 @@ void DolphinApp::AfterInit()
   }
   // If we have selected Automatic Start, start the default ISO,
   // or if no default ISO exists, start the last loaded ISO
-  else if (main_frame->m_code_window)
+  else if (m_use_debugger)
   {
-    if (main_frame->m_code_window->AutomaticStart())
+    if (main_frame->GetMenuBar()->IsChecked(IDM_AUTOMATIC_START))
     {
       main_frame->BootGame("");
     }
@@ -354,7 +356,7 @@ void DolphinApp::OnIdle(wxIdleEvent& ev)
 // ------------
 // Talk to GUI
 
-bool wxMsgAlert(const char* caption, const char* text, bool yes_no, int /*Style*/)
+bool wxMsgAlert(const char* caption, const char* text, bool yes_no, MsgType /*style*/)
 {
   if (wxIsMainThread())
   {
@@ -456,55 +458,9 @@ void Host_RequestRenderWindowSize(int width, int height)
   main_frame->GetEventHandler()->AddPendingEvent(event);
 }
 
-void Host_SetStartupDebuggingParameters()
+bool Host_UINeedsControllerState()
 {
-  SConfig& StartUp = SConfig::GetInstance();
-  if (main_frame->m_code_window)
-  {
-    StartUp.bBootToPause = main_frame->m_code_window->BootToPause();
-    StartUp.bAutomaticStart = main_frame->m_code_window->AutomaticStart();
-    StartUp.bJITNoBlockCache = main_frame->m_code_window->JITNoBlockCache();
-    StartUp.bJITNoBlockLinking = main_frame->m_code_window->JITNoBlockLinking();
-  }
-  else
-  {
-    StartUp.bBootToPause = false;
-  }
-  StartUp.bEnableDebugging = main_frame->m_code_window ? true : false;  // RUNNING_DEBUG
-}
-
-void Host_SetWiiMoteConnectionState(int _State)
-{
-  static int currentState = -1;
-  if (_State == currentState)
-    return;
-  currentState = _State;
-
-  wxCommandEvent event(wxEVT_HOST_COMMAND, IDM_UPDATE_STATUS_BAR);
-
-  switch (_State)
-  {
-  case 0:
-    event.SetString(_("Not connected"));
-    break;
-  case 1:
-    event.SetString(_("Connecting..."));
-    break;
-  case 2:
-    event.SetString(_("Wii Remote Connected"));
-    break;
-  }
-  // Update field 1 or 2
-  event.SetInt(1);
-
-  NOTICE_LOG(WIIMOTE, "%s", static_cast<const char*>(event.GetString().c_str()));
-
-  main_frame->GetEventHandler()->AddPendingEvent(event);
-}
-
-bool Host_UIHasFocus()
-{
-  return wxGetApp().IsActiveThreadsafe();
+  return wxGetApp().IsActiveThreadsafe() && GetUINeedsControllerState();
 }
 
 bool Host_RendererHasFocus()
@@ -515,21 +471,6 @@ bool Host_RendererHasFocus()
 bool Host_RendererIsFullscreen()
 {
   return main_frame->RendererIsFullscreen();
-}
-
-void Host_ConnectWiimote(int wm_idx, bool connect)
-{
-  std::lock_guard<std::mutex> lk(s_init_mutex);
-  if (connect)
-  {
-    wxCommandEvent event(wxEVT_HOST_COMMAND, IDM_FORCE_CONNECT_WIIMOTE1 + wm_idx);
-    main_frame->GetEventHandler()->AddPendingEvent(event);
-  }
-  else
-  {
-    wxCommandEvent event(wxEVT_HOST_COMMAND, IDM_FORCE_DISCONNECT_WIIMOTE1 + wm_idx);
-    main_frame->GetEventHandler()->AddPendingEvent(event);
-  }
 }
 
 void Host_ShowVideoConfig(void* parent, const std::string& backend_name)
@@ -551,4 +492,13 @@ void Host_ShowVideoConfig(void* parent, const std::string& backend_name)
 void Host_YieldToUI()
 {
   wxGetApp().GetMainLoop()->YieldFor(wxEVT_CATEGORY_UI);
+}
+
+void Host_UpdateProgressDialog(const char* caption, int position, int total)
+{
+  wxCommandEvent event(wxEVT_HOST_COMMAND, IDM_UPDATE_PROGRESS_DIALOG);
+  event.SetString(caption);
+  event.SetInt(position);
+  event.SetExtraLong(total);
+  main_frame->GetEventHandler()->AddPendingEvent(event);
 }

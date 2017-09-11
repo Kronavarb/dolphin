@@ -2,9 +2,9 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <windows.h>
 #include <array>
 #include <string>
-#include <windows.h>
 
 #include "Common/GL/GLInterface/WGL.h"
 #include "Common/Logging/Log.h"
@@ -200,7 +200,7 @@ bool cInterfaceWGL::PeekMessages()
 
 // Create rendering window.
 // Call browser: Core.cpp:EmuThread() > main.cpp:Video_Initialize()
-bool cInterfaceWGL::Create(void* window_handle, bool core)
+bool cInterfaceWGL::Create(void* window_handle, bool stereo, bool core)
 {
   if (!window_handle)
     return false;
@@ -219,12 +219,14 @@ bool cInterfaceWGL::Create(void* window_handle, bool core)
   s_backbuffer_width = twidth;
   s_backbuffer_height = theight;
 
-  static constexpr PIXELFORMATDESCRIPTOR pfd = {
+  const DWORD stereo_flag = stereo ? PFD_STEREO : 0;
+  static const PIXELFORMATDESCRIPTOR pfd = {
       sizeof(PIXELFORMATDESCRIPTOR),  // Size Of This Pixel Format Descriptor
       1,                              // Version Number
       PFD_DRAW_TO_WINDOW |            // Format Must Support Window
           PFD_SUPPORT_OPENGL |        // Format Must Support OpenGL
-          PFD_DOUBLEBUFFER,           // Must Support Double Buffering
+          PFD_DOUBLEBUFFER |          // Must Support Double Buffering
+          stereo_flag,                // Could Support Quad Buffering
       PFD_TYPE_RGBA,                  // Request An RGBA Format
       32,                             // Select Our Color Depth
       0,
@@ -248,8 +250,8 @@ bool cInterfaceWGL::Create(void* window_handle, bool core)
     return false;
   }
 
-  int pixel_format;
-  if (!(pixel_format = ChoosePixelFormat(m_dc, &pfd)))
+  int pixel_format = ChoosePixelFormat(m_dc, &pfd);
+  if (!pixel_format)
   {
     PanicAlert("(2) Can't find a suitable PixelFormat.");
     return false;
@@ -261,7 +263,8 @@ bool cInterfaceWGL::Create(void* window_handle, bool core)
     return false;
   }
 
-  if (!(m_rc = wglCreateContext(m_dc)))
+  m_rc = wglCreateContext(m_dc);
+  if (!m_rc)
   {
     PanicAlert("(4) Can't create an OpenGL rendering context.");
     return false;

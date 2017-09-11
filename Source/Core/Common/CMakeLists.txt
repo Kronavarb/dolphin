@@ -6,14 +6,21 @@ set(SRCS
   Config/Config.cpp
   Config/Layer.cpp
   Config/Section.cpp
+  Crypto/AES.cpp
+  Crypto/bn.cpp
+  Crypto/ec.cpp
   ENetUtil.cpp
+  File.cpp
   FileSearch.cpp
   FileUtil.cpp
   GekkoDisassembler.cpp
   Hash.cpp
+  HttpRequest.cpp
   IniFile.cpp
   JitRegister.cpp
+  Logging/LogManager.cpp
   MathUtil.cpp
+  MD5.cpp
   MemArena.cpp
   MemoryUtil.cpp
   MsgHandler.cpp
@@ -30,14 +37,10 @@ set(SRCS
   Thread.cpp
   Timer.cpp
   TraversalClient.cpp
+  UPnP.cpp
   Version.cpp
   x64ABI.cpp
   x64Emitter.cpp
-  MD5.cpp
-  Crypto/AES.cpp
-  Crypto/bn.cpp
-  Crypto/ec.cpp
-  Logging/LogManager.cpp
 )
 
 set(LIBS ${LIBS} ${MBEDTLS_LIBRARIES})
@@ -94,7 +97,7 @@ if(USE_EGL)
 endif()
 
 if(WIN32)
-  set(SRCS ${SRCS} GL/GLInterface/WGL.cpp)
+  set(SRCS ${SRCS} GL/GLInterface/WGL.cpp CompatPatches.cpp)
 elseif(APPLE)
   set(SRCS ${SRCS} GL/GLInterface/AGL.mm)
 elseif(HAIKU)
@@ -117,10 +120,20 @@ endif()
 
 add_dolphin_library(common "${SRCS}" "${LIBS}")
 
+if(USE_UPNP)
+  target_link_libraries(common PRIVATE Miniupnpc::miniupnpc)
+endif()
+
+if(OPROFILE_FOUND)
+  target_link_libraries(common PRIVATE ${OPROFILE_LIBRARIES})
+endif()
+
 if(UNIX)
   # Posix networking code needs to be fixed for Windows
   add_executable(traversal_server TraversalServer.cpp)
   if(HAIKU)
     target_link_libraries(traversal_server network)
   endif()
+elseif(WIN32)
+  target_link_libraries(common PRIVATE "-INCLUDE:enableCompatPatches")
 endif()

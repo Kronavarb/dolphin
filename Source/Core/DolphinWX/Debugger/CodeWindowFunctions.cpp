@@ -70,7 +70,7 @@ void CCodeWindow::Load()
   IniFile::Section* general = ini.GetOrCreateSection("General");
   general->Get("DebuggerFont", &fontDesc);
   general->Get("AutomaticStart", &config_instance.bAutomaticStart, false);
-  general->Get("BootToPause", &config_instance.bBootToPause, true);
+  general->Get("BootToPause", &config_instance.bBootToPause, false);
 
   if (!fontDesc.empty())
     DebuggerFont.SetNativeFontInfoUserDesc(StrToWxStr(fontDesc));
@@ -146,11 +146,12 @@ void CCodeWindow::OnProfilerMenu(wxCommandEvent& event)
       File::CreateFullPath(filename);
       Profiler::WriteProfileResults(filename);
 
-      wxFileType* filetype = nullptr;
-      if (!(filetype = wxTheMimeTypesManager->GetFileTypeFromExtension("txt")))
+      wxFileType* filetype = wxTheMimeTypesManager->GetFileTypeFromExtension("txt");
+      if (!filetype)
       {
         // From extension failed, trying with MIME type now
-        if (!(filetype = wxTheMimeTypesManager->GetFileTypeFromMimeType("text/plain")))
+        filetype = wxTheMimeTypesManager->GetFileTypeFromMimeType("text/plain");
+        if (!filetype)
           // MIME type failed, aborting mission
           break;
       }
@@ -173,8 +174,9 @@ void CCodeWindow::OnSymbolsMenu(wxCommandEvent& event)
   if (!Core::IsRunning())
     return;
 
-  std::string existing_map_file, writable_map_file, title_id_str;
-  bool map_exists = CBoot::FindMapFile(&existing_map_file, &writable_map_file, &title_id_str);
+  const std::string& title_id_str = SConfig::GetInstance().m_debugger_game_id;
+  std::string existing_map_file, writable_map_file;
+  bool map_exists = CBoot::FindMapFile(&existing_map_file, &writable_map_file);
   switch (event.GetId())
   {
   case IDM_CLEAR_SYMBOLS:
@@ -287,7 +289,7 @@ void CCodeWindow::OnSymbolsMenu(wxCommandEvent& event)
   }
   break;
   case IDM_SAVEMAPFILE:
-    g_symbolDB.SaveMap(writable_map_file);
+    g_symbolDB.SaveSymbolMap(writable_map_file);
     break;
   case IDM_SAVE_MAP_FILE_AS:
   {
@@ -297,12 +299,17 @@ void CCodeWindow::OnSymbolsMenu(wxCommandEvent& event)
         wxFD_SAVE | wxFD_OVERWRITE_PROMPT, this);
 
     if (!path.IsEmpty())
-      g_symbolDB.SaveMap(WxStrToStr(path));
+      g_symbolDB.SaveSymbolMap(WxStrToStr(path));
   }
   break;
   case IDM_SAVE_MAP_FILE_WITH_CODES:
-    g_symbolDB.SaveMap(writable_map_file, true);
-    break;
+  {
+    // Format the name for the codes version
+    const std::string path =
+        writable_map_file.substr(0, writable_map_file.find_last_of(".")) + "_code.map";
+    g_symbolDB.SaveCodeMap(path);
+  }
+  break;
 
   case IDM_RENAME_SYMBOLS:
   {
@@ -314,7 +321,7 @@ void CCodeWindow::OnSymbolsMenu(wxCommandEvent& event)
     if (!path.IsEmpty())
     {
       std::ifstream f;
-      OpenFStream(f, WxStrToStr(path), std::ios_base::in);
+      File::OpenFStream(f, WxStrToStr(path), std::ios_base::in);
 
       std::string line;
       while (std::getline(f, line))
@@ -330,7 +337,7 @@ void CCodeWindow::OnSymbolsMenu(wxCommandEvent& event)
 
         Symbol* symbol = g_symbolDB.GetSymbolFromAddr(address);
         if (symbol)
-          symbol->name = line.substr(12);
+          symbol->Rename(line.substr(12));
       }
 
       Host_NotifyMapLoaded();
@@ -496,6 +503,16 @@ void CCodeWindow::OnChangeFont(wxCommandEvent& event)
 
   UpdateFonts();
   // TODO: Send event to all panels that tells them to reload the font when it changes.
+}
+
+void CCodeWindow::OnBootToPauseSelected(wxCommandEvent& event)
+{
+  SConfig::GetInstance().bBootToPause = event.IsChecked();
+}
+
+void CCodeWindow::OnAutomaticStartSelected(wxCommandEvent& event)
+{
+  SConfig::GetInstance().bAutomaticStart = event.IsChecked();
 }
 
 // Toggle windows

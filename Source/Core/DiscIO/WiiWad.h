@@ -13,13 +13,13 @@
 
 namespace DiscIO
 {
-class IBlobReader;
-class CBlobBigEndianReader;
+class BlobReader;
 
 class WiiWAD
 {
 public:
   explicit WiiWAD(const std::string& name);
+  explicit WiiWAD(std::unique_ptr<BlobReader> blob_reader);
   ~WiiWAD();
 
   bool IsValid() const { return m_valid; }
@@ -33,9 +33,9 @@ public:
 private:
   bool ParseWAD();
 
-  bool m_valid;
+  bool m_valid = false;
 
-  std::unique_ptr<IBlobReader> m_reader;
+  std::unique_ptr<BlobReader> m_reader;
 
   u64 m_data_app_offset = 0;
   std::vector<u8> m_certificate_chain;

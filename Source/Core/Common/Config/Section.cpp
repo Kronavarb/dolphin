@@ -2,7 +2,6 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include <array>
 #include <cstddef>
 #include <map>
 #include <memory>
@@ -55,6 +54,11 @@ void Section::Set(const std::string& key, const std::string& value)
   }
 }
 
+void Section::Set(const std::string& key, u16 newValue)
+{
+  Section::Set(key, StringFromFormat("0x%04x", newValue));
+}
+
 void Section::Set(const std::string& key, u32 newValue)
 {
   Section::Set(key, StringFromFormat("0x%08x", newValue));
@@ -72,7 +76,7 @@ void Section::Set(const std::string& key, double newValue)
 
 void Section::Set(const std::string& key, int newValue)
 {
-  Section::Set(key, StringFromInt(newValue));
+  Section::Set(key, std::to_string(newValue));
 }
 
 void Section::Set(const std::string& key, bool newValue)
@@ -114,6 +118,18 @@ bool Section::Get(const std::string& key, std::string* value,
 }
 
 bool Section::Get(const std::string& key, int* value, int defaultValue) const
+{
+  std::string temp;
+  bool retval = Get(key, &temp);
+
+  if (retval && TryParse(temp, value))
+    return true;
+
+  *value = defaultValue;
+  return false;
+}
+
+bool Section::Get(const std::string& key, u16* value, u16 defaultValue) const
 {
   std::string temp;
   bool retval = Get(key, &temp);
@@ -254,13 +270,7 @@ bool RecursiveSection::Exists(const std::string& key) const
 bool RecursiveSection::Get(const std::string& key, std::string* value,
                            const std::string& default_value) const
 {
-  static constexpr std::array<LayerType, 7> search_order = {{
-      // Skip the meta layer
-      LayerType::CurrentRun, LayerType::CommandLine, LayerType::Movie, LayerType::Netplay,
-      LayerType::LocalGame, LayerType::GlobalGame, LayerType::Base,
-  }};
-
-  for (auto layer_id : search_order)
+  for (auto layer_id : SEARCH_ORDER)
   {
     auto layers_it = Config::GetLayers()->find(layer_id);
     if (layers_it == Config::GetLayers()->end())

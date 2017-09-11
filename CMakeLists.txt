@@ -14,14 +14,13 @@ option(USE_EGL "Enables EGL OpenGL Interface" OFF)
 option(TRY_X11 "Enables X11 Support" ON)
 option(USE_SHARED_ENET "Use shared libenet if found rather than Dolphin's soon-to-compatibly-diverge version" OFF)
 option(USE_UPNP "Enables UPnP port mapping support" ON)
-option(DISABLE_WX "Disable wxWidgets (use Qt or CLI interface)" OFF)
-option(ENABLE_QT2 "Enable Qt2 (use the other experimental Qt interface)" OFF)
+option(ENABLE_WX "Enable wxWidgets (Default)" ON)
+option(ENABLE_QT2 "Enable Qt2 (use the other experimental Qt interface)" ON)
 option(ENABLE_LTO "Enables Link Time Optimization" OFF)
 option(ENABLE_GENERIC "Enables generic build that should run on any little-endian host" OFF)
 option(ENABLE_HEADLESS "Enables running Dolphin as a headless variant" OFF)
 option(ENABLE_ALSA "Enables ALSA sound backend" ON)
 option(ENABLE_PULSEAUDIO "Enables PulseAudio sound backend" ON)
-option(ENABLE_OPENAL "Enables OpenAL sound backend" ON)
 option(ENABLE_LLVM "Enables LLVM support, for disassembly" ON)
 
 # Maintainers: if you consider blanket disabling this for your users, please
@@ -217,10 +216,16 @@ if(CMAKE_C_COMPILER_ID MATCHES "MSVC")
   check_and_add_flag(EXCEPTIONS /EHsc)
   dolphin_compile_definitions(_DEBUG DEBUG_ONLY)
 
+  # Enforce C++ standard conforming conversion rules to catch possible bugs
+  add_compile_options(/permissive-)
+  # Remove unreferenced inline functions/data to reduce link time and catch bugs
+  add_compile_options(/Zc:inline)
+  # Assume `new` (w/o std::nothrow) throws to reduce binary size
+  add_compile_options(/Zc:throwingNew)
+  # Enforce strict volatile semantics as per ISO C++
+  add_compile_options(/volatile:iso)
+
   string(APPEND CMAKE_EXE_LINKER_FLAGS " /NXCOMPAT")
-  string(APPEND CMAKE_EXE_LINKER_FLAGS " /BASE:0x00400000")
-  string(APPEND CMAKE_EXE_LINKER_FLAGS " /DYNAMICBASE:NO")
-  string(APPEND CMAKE_EXE_LINKER_FLAGS " /FIXED")
 else()
   add_definitions(-D_DEFAULT_SOURCE)
   check_and_add_flag(HAVE_WALL -Wall)
@@ -252,15 +257,6 @@ else()
 
   dolphin_compile_definitions(_DEBUG DEBUG_ONLY)
   check_and_add_flag(GGDB -ggdb DEBUG_ONLY)
-
-  if(NOT ANDROID AND _M_X86_64)
-    # PIE is required on Android, but not supported with the x86_64 jit currently
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fno-pie")
-    check_c_compiler_flag("-no-pie" NO_PIE_UPSTREAM)
-    if(NO_PIE_UPSTREAM)
-      set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -no-pie")
-    endif()
-  endif()
 endif()
 
 if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
@@ -283,10 +279,6 @@ if(CMAKE_SYSTEM_NAME MATCHES "Darwin")
   # Linker flags.
   # Drop unreachable code and data.
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-dead_strip,-dead_strip_dylibs")
-  # Reserve the minimum size for the zero page.
-  # Our JIT requires virtual memory space below 2GB, while the default zero
-  # page on x86_64 is 4GB in size.
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-pagezero_size,0x1000")
 
   find_library(APPKIT_LIBRARY AppKit)
   find_library(APPSERV_LIBRARY ApplicationServices)
@@ -395,7 +387,7 @@ if(ANDROID)
   set(USE_X11 0)
   set(USE_UPNP 0)
   set(USE_EGL 1)
-  set(DISABLE_WX 1)
+  set(ENABLE_WX 0)
   set(ENABLE_QT2 0)
 
   # We are cross compiling, search only the toolchain for libraries and includes
@@ -412,10 +404,14 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 if(ENABLE_HEADLESS)
-  message(STATUS "Enabling Headless! Disabling GUI, force enabling EGL!")
+  if(APPLE)
+    message(STATUS "Enabling Headless! Disabling GUI.")
+  else()
+    message(STATUS "Enabling Headless! Disabling GUI, force enabling EGL!")
+    set(USE_EGL 1)
+  endif()
   set(USE_X11 0)
-  set(USE_EGL 1)
-  set(DISABLE_WX 1)
+  set(ENABLE_WX 0)
   set(ENABLE_QT2 0)
   add_definitions(-DUSE_HEADLESS)
 endif()
@@ -477,37 +473,17 @@ if(USE_X11)
 
   pkg_check_modules(X11_INPUT REQUIRED xi>=1.5.0)
 endif()
+
 if(ENCODE_FRAMEDUMPS)
-  check_libav()
-  if(LIBAV_FOUND)
-    LIST(APPEND LIBS ${LIBAV_LDFLAGS})
+  if(WIN32)
+    set(FFMPEG_DIR Externals/ffmpeg)
   endif()
-
-endif()
-
-if(NOT ANDROID)
-  set(PORTAUDIO_FOUND TRUE)
-  add_definitions(-DHAVE_PORTAUDIO=1)
-
-  if(NOT APPLE)
-      set(CMAKE_REQUIRED_LIBRARIES portaudio)
-      CHECK_CXX_SOURCE_RUNS(
-        "#include <portaudio.h>
-      int main(int argc, char **argv)
-      { if(Pa_GetVersion() >= 1890) return 0; else return 1; }"
-      SYSTEM_PORTAUDIO)
-    unset(CMAKE_REQUIRED_LIBRARIES)
-  endif()
-  if(SYSTEM_PORTAUDIO AND NOT APPLE)
-    message(STATUS "Using shared PortAudio for mic support")
-    set(PORTAUDIO_LIBRARIES portaudio)
+  find_package(FFmpeg COMPONENTS avcodec avformat avutil swscale)
+  if(FFmpeg_FOUND)
+    message(STATUS "libav/ffmpeg found, enabling AVI frame dumps")
+    add_definitions(-DHAVE_FFMPEG)
   else()
-    message(STATUS "Using static PortAudio from Externals for mic support")
-    option(PA_USE_ASIO "Enable PortAudio support for ASIO" OFF)
-    option(PA_USE_DS "Enable PortAudio support for DirectSound" OFF)
-    option(PA_USE_WDMKS "Enable PortAudio support for WDMKS" OFF)
-    add_subdirectory(Externals/portaudio EXCLUDE_FROM_ALL)
-    set(PORTAUDIO_LIBRARIES portaudio_static)
+    message(STATUS "libav/ffmpeg not found, disabling AVI frame dumps")
   endif()
 endif()
 
@@ -574,6 +550,8 @@ add_subdirectory(Externals/Bochs_disasm)
 include_directories(Externals/Bochs_disasm)
 
 add_subdirectory(Externals/glslang)
+
+add_subdirectory(Externals/pugixml)
 
 add_subdirectory(Externals/cpp-optparse)
 
@@ -647,12 +625,12 @@ else()
   set(PNG png)
 endif()
 
-find_package(OpenAL)
-
 # Using static soundtouch from Externals
 # Unable to use system soundtouch library: We require shorts, not floats.
 add_subdirectory(Externals/soundtouch)
 include_directories(Externals)
+
+add_subdirectory(Externals/cubeb EXCLUDE_FROM_ALL)
 
 if(NOT ANDROID)
   add_definitions(-D__LIBUSB__)
@@ -692,12 +670,8 @@ if(USE_UPNP)
   else()
     message(STATUS "Using static miniupnpc from Externals")
     add_subdirectory(Externals/miniupnpc)
-    set(MINIUPNPC_INCLUDE_DIRS Externals/miniupnpc/src)
-    set(MINIUPNPC_LIBRARIES miniupnpc)
   endif()
   add_definitions(-DUSE_UPNP)
-  include_directories(${MINIUPNPC_INCLUDE_DIRS})
-  list(APPEND LIBS ${MINIUPNPC_LIBRARIES})
 endif()
 
 if(NOT APPLE)
@@ -756,7 +730,7 @@ if(NOT ANDROID)
   endif()
 endif()
 
-if(NOT DISABLE_WX)
+if(ENABLE_WX)
   find_package(wxWidgets 3.1.0 COMPONENTS core aui adv)
 
   if(_ARCH_32)
@@ -806,12 +780,10 @@ include_directories("${PROJECT_BINARY_DIR}/Source/Core")
 message(STATUS "Using static gtest from Externals")
 add_subdirectory(Externals/gtest EXCLUDE_FROM_ALL)
 
-enable_testing()
-add_custom_target(unittests)
-add_custom_command(TARGET unittests POST_BUILD COMMAND ${CMAKE_CTEST_COMMAND})
-
+########################################
+# Process Dolphin source now that all setup is complete
+#
 add_subdirectory(Source)
-
 
 ########################################
 # Install shared data files

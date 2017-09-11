@@ -2,31 +2,25 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/PowerPC/SignatureDB/SignatureDB.h"
+
+#include <memory>
 #include <string>
 
 #include "Common/CommonTypes.h"
-#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
-#include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 #include "Core/PowerPC/PowerPC.h"
-#include "Core/PowerPC/SignatureDB/SignatureDB.h"
 
 // Format Handlers
 #include "Core/PowerPC/SignatureDB/CSVSignatureDB.h"
 #include "Core/PowerPC/SignatureDB/DSYSignatureDB.h"
 #include "Core/PowerPC/SignatureDB/MEGASignatureDB.h"
 
-SignatureDB::SignatureDB(SignatureDB::HandlerType handler) : m_handler(CreateFormatHandler(handler))
+namespace
 {
-}
-
-SignatureDB::SignatureDB(const std::string& file_path) : SignatureDB(GetHandlerType(file_path))
-{
-}
-
-SignatureDB::HandlerType SignatureDB::GetHandlerType(const std::string& file_path)
+SignatureDB::HandlerType GetHandlerType(const std::string& file_path)
 {
   if (StringEndsWith(file_path, ".csv"))
     return SignatureDB::HandlerType::CSV;
@@ -35,8 +29,7 @@ SignatureDB::HandlerType SignatureDB::GetHandlerType(const std::string& file_pat
   return SignatureDB::HandlerType::DSY;
 }
 
-std::unique_ptr<SignatureDBFormatHandler>
-SignatureDB::CreateFormatHandler(SignatureDB::HandlerType handler) const
+std::unique_ptr<SignatureDBFormatHandler> CreateFormatHandler(SignatureDB::HandlerType handler)
 {
   switch (handler)
   {
@@ -48,6 +41,15 @@ SignatureDB::CreateFormatHandler(SignatureDB::HandlerType handler) const
   case SignatureDB::HandlerType::MEGA:
     return std::make_unique<MEGASignatureDB>();
   }
+}
+}  // Anonymous namespace
+
+SignatureDB::SignatureDB(HandlerType handler) : m_handler(CreateFormatHandler(handler))
+{
+}
+
+SignatureDB::SignatureDB(const std::string& file_path) : SignatureDB(GetHandlerType(file_path))
+{
 }
 
 void SignatureDB::Clear()
@@ -125,15 +127,14 @@ void HashSignatureDB::Apply(PPCSymbolDB* symbol_db) const
     for (const auto& function : symbol_db->GetSymbolsFromHash(entry.first))
     {
       // Found the function. Let's rename it according to the symbol file.
+      function->Rename(entry.second.name);
       if (entry.second.size == static_cast<unsigned int>(function->size))
       {
-        function->name = entry.second.name;
         INFO_LOG(OSHLE, "Found %s at %08x (size: %08x)!", entry.second.name.c_str(),
                  function->address, function->size);
       }
       else
       {
-        function->name = entry.second.name;
         ERROR_LOG(OSHLE, "Wrong size! Found %s at %08x (size: %08x instead of %08x)!",
                   entry.second.name.c_str(), function->address, function->size, entry.second.size);
       }
@@ -217,6 +218,4 @@ u32 HashSignatureDB::ComputeCodeChecksum(u32 offsetStart, u32 offsetEnd)
   return sum;
 }
 
-SignatureDBFormatHandler::~SignatureDBFormatHandler()
-{
-}
+SignatureDBFormatHandler::~SignatureDBFormatHandler() = default;

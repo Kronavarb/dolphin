@@ -20,6 +20,7 @@
 #include <wx/menu.h>
 #include <wx/msgdlg.h>
 #include <wx/panel.h>
+#include <wx/progdlg.h>
 #include <wx/sizer.h>
 #include <wx/statusbr.h>
 #include <wx/textctrl.h>
@@ -41,7 +42,9 @@
 #include "Common/Logging/ConsoleListener.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
+#include "Common/Version.h"
 
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/DVD/DVDInterface.h"
@@ -243,6 +246,7 @@ BEGIN_EVENT_TABLE(CFrame, CRenderFrame)
 EVT_MENU_RANGE(IDM_FLOAT_LOG_WINDOW, IDM_FLOAT_CODE_WINDOW, CFrame::OnFloatWindow)
 
 // Game list context menu
+EVT_MENU(IDM_LIST_PERFORM_DISC_UPDATE, CFrame::OnPerformDiscWiiUpdate)
 EVT_MENU(IDM_LIST_INSTALL_WAD, CFrame::OnInstallWAD)
 EVT_MENU(IDM_LIST_UNINSTALL_WAD, CFrame::OnUninstallWAD)
 
@@ -336,7 +340,8 @@ CFrame::CFrame(wxFrame* parent, wxWindowID id, const wxString& title, wxRect geo
   wxFrame::CreateToolBar(wxTB_DEFAULT_STYLE | wxTB_TEXT | wxTB_FLAT)->Realize();
 
   // Give it a status bar
-  SetStatusBar(CreateStatusBar(2, wxST_SIZEGRIP, ID_STATUSBAR));
+  SetStatusBar(
+      CreateStatusBar(2, wxSTB_SIZEGRIP | wxSTB_ELLIPSIZE_END | wxSTB_SHOW_TIPS, ID_STATUSBAR));
   if (!SConfig::GetInstance().m_InterfaceStatusbar)
     GetStatusBar()->Hide();
 
@@ -350,8 +355,9 @@ CFrame::CFrame(wxFrame* parent, wxWindowID id, const wxString& title, wxRect geo
   // This panel is the parent for rendering and it holds the gamelistctrl
   m_panel = new wxPanel(this, IDM_MPANEL, wxDefaultPosition, wxDefaultSize, 0);
 
-  m_game_list_ctrl = new CGameListCtrl(m_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
-                                       wxLC_REPORT | wxSUNKEN_BORDER | wxLC_ALIGN_LEFT);
+  m_game_list_ctrl =
+      new GameListCtrl(m_batch_mode, m_panel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                       wxLC_REPORT | wxSUNKEN_BORDER | wxLC_ALIGN_LEFT);
   m_game_list_ctrl->Bind(wxEVT_LIST_ITEM_ACTIVATED, &CFrame::OnGameListCtrlItemActivated, this);
 
   wxBoxSizer* sizerPanel = new wxBoxSizer(wxHORIZONTAL);
@@ -445,6 +451,10 @@ CFrame::CFrame(wxFrame* parent, wxWindowID id, const wxString& title, wxRect geo
   Bind(wxEVT_TIMER, &CFrame::PollHotkeys, this, m_poll_hotkey_timer.GetId());
   m_poll_hotkey_timer.Start(1000 / 60, wxTIMER_CONTINUOUS);
 
+  m_cursor_timer.SetOwner(this);
+  Bind(wxEVT_TIMER, &CFrame::HandleCursorTimer, this, m_cursor_timer.GetId());
+  m_cursor_timer.StartOnce(MOUSE_HIDE_DELAY);
+
   // Shut down cleanly on SIGINT, SIGTERM (Unix) and on various signals on Windows
   m_handle_signal_timer.SetOwner(this);
   Bind(wxEVT_TIMER, &CFrame::HandleSignal, this, m_handle_signal_timer.GetId());
@@ -489,7 +499,8 @@ void CFrame::BindEvents()
   BindMenuBarEvents();
 
   Bind(DOLPHIN_EVT_RELOAD_THEME_BITMAPS, &CFrame::OnReloadThemeBitmaps, this);
-  Bind(DOLPHIN_EVT_RELOAD_GAMELIST, &CFrame::OnReloadGameList, this);
+  Bind(DOLPHIN_EVT_REFRESH_GAMELIST, &CFrame::OnRefreshGameList, this);
+  Bind(DOLPHIN_EVT_RESCAN_GAMELIST, &CFrame::OnRescanGameList, this);
   Bind(DOLPHIN_EVT_UPDATE_LOAD_WII_MENU_ITEM, &CFrame::OnUpdateLoadWiiMenuItem, this);
   Bind(DOLPHIN_EVT_BOOT_SOFTWARE, &CFrame::OnPlay, this);
   Bind(DOLPHIN_EVT_STOP_SOFTWARE, &CFrame::OnStop, this);
@@ -746,17 +757,17 @@ void CFrame::UninhibitScreensaver()
 #endif
 }
 
-void CFrame::UpdateTitle(const std::string& str)
+void CFrame::UpdateTitle(const wxString& str)
 {
+  const wxString revision_string = StrToWxStr(Common::scm_rev_str);
   if (SConfig::GetInstance().bRenderToMain && SConfig::GetInstance().m_InterfaceStatusbar)
   {
     GetStatusBar()->SetStatusText(str, 0);
-    m_render_frame->SetTitle(scm_rev_str);
+    m_render_frame->SetTitle(revision_string);
   }
   else
   {
-    std::string titleStr = StringFromFormat("%s | %s", scm_rev_str.c_str(), str.c_str());
-    m_render_frame->SetTitle(titleStr);
+    m_render_frame->SetTitle(revision_string + StrToWxStr(" | ") + str);
   }
 }
 
@@ -779,7 +790,7 @@ void CFrame::OnHostMessage(wxCommandEvent& event)
     break;
 
   case IDM_UPDATE_TITLE:
-    UpdateTitle(WxStrToStr(event.GetString()));
+    UpdateTitle(event.GetString());
     break;
 
   case IDM_WINDOW_SIZE_REQUEST:
@@ -814,21 +825,36 @@ void CFrame::OnHostMessage(wxCommandEvent& event)
     OnStopped();
     break;
 
-  case IDM_FORCE_CONNECT_WIIMOTE1:
-  case IDM_FORCE_CONNECT_WIIMOTE2:
-  case IDM_FORCE_CONNECT_WIIMOTE3:
-  case IDM_FORCE_CONNECT_WIIMOTE4:
-  case IDM_FORCE_CONNECT_BALANCEBOARD:
-    ConnectWiimote(event.GetId() - IDM_FORCE_CONNECT_WIIMOTE1, true);
-    break;
-
-  case IDM_FORCE_DISCONNECT_WIIMOTE1:
-  case IDM_FORCE_DISCONNECT_WIIMOTE2:
-  case IDM_FORCE_DISCONNECT_WIIMOTE3:
-  case IDM_FORCE_DISCONNECT_WIIMOTE4:
-  case IDM_FORCE_DISCONNECT_BALANCEBOARD:
-    ConnectWiimote(event.GetId() - IDM_FORCE_DISCONNECT_WIIMOTE1, false);
-    break;
+  case IDM_UPDATE_PROGRESS_DIALOG:
+  {
+    int current = event.GetInt();
+    int total = static_cast<int>(event.GetExtraLong());
+    if (total < 0 || current >= total)
+    {
+      if (m_progress_dialog)
+      {
+        delete m_progress_dialog;
+        m_progress_dialog = nullptr;
+      }
+    }
+    else if (total > 0 && current < total)
+    {
+      if (!m_progress_dialog)
+      {
+        m_progress_dialog = new wxProgressDialog(
+            _("Operation in progress..."), event.GetString(), total, m_render_frame,
+            wxPD_APP_MODAL | wxPD_ELAPSED_TIME | wxPD_SMOOTH | wxPD_REMAINING_TIME);
+        m_progress_dialog->Show();
+      }
+      else
+      {
+        if (m_progress_dialog->GetRange() != total)
+          m_progress_dialog->SetRange(total);
+        m_progress_dialog->Update(current, event.GetString());
+      }
+    }
+  }
+  break;
   }
 }
 
@@ -875,7 +901,7 @@ void CFrame::OnGameListCtrlItemActivated(wxListEvent& WXUNUSED(event))
   // 1. Boot the selected iso
   // 2. Boot the default or last loaded iso.
   // 3. Call BrowseForDirectory if the gamelist is empty
-  if (!m_game_list_ctrl->GetISO(0) && CGameListCtrl::IsHidingItems())
+  if (!m_game_list_ctrl->GetISO(0) && GameListCtrl::IsHidingItems())
   {
     SConfig::GetInstance().m_ListGC = SConfig::GetInstance().m_ListWii =
         SConfig::GetInstance().m_ListWad = SConfig::GetInstance().m_ListElfDol =
@@ -908,7 +934,7 @@ void CFrame::OnGameListCtrlItemActivated(wxListEvent& WXUNUSED(event))
     GetMenuBar()->FindItem(IDM_LIST_WORLD)->Check(true);
     GetMenuBar()->FindItem(IDM_LIST_UNKNOWN)->Check(true);
 
-    UpdateGameList();
+    GameListRefresh();
   }
   else if (!m_game_list_ctrl->GetISO(0))
   {
@@ -1118,6 +1144,13 @@ void CFrame::OnKeyDown(wxKeyEvent& event)
 
 void CFrame::OnMouse(wxMouseEvent& event)
 {
+  if (!SConfig::GetInstance().bHideCursor && main_frame->RendererHasFocus() &&
+      Core::GetState() == Core::State::Running)
+  {
+    m_render_parent->SetCursor(wxNullCursor);
+    m_cursor_timer.StartOnce(MOUSE_HIDE_DELAY);
+  }
+
   // next handlers are all for FreeLook, so we don't need to check them if disabled
   if (!g_Config.bFreeLook)
   {
@@ -1245,9 +1278,7 @@ void CFrame::DoExclusiveFullscreen(bool enable_fullscreen)
   if (!g_renderer || g_renderer->IsFullscreen() == enable_fullscreen)
     return;
 
-  bool was_unpaused = Core::PauseAndLock(true);
-  g_renderer->SetFullscreen(enable_fullscreen);
-  Core::PauseAndLock(false, was_unpaused);
+  Core::RunAsCPUThread([enable_fullscreen] { g_renderer->SetFullscreen(enable_fullscreen); });
 }
 
 void CFrame::PollHotkeys(wxTimerEvent& event)
@@ -1423,41 +1454,46 @@ void CFrame::ParseHotkeys()
   if (IsHotkey(HK_INCREASE_IR))
   {
     OSDChoice = 1;
-    ++g_Config.iEFBScale;
+    Config::SetCurrent(Config::GFX_EFB_SCALE, Config::Get(Config::GFX_EFB_SCALE) + 1);
   }
   if (IsHotkey(HK_DECREASE_IR))
   {
     OSDChoice = 1;
-    if (--g_Config.iEFBScale < SCALE_AUTO)
-      g_Config.iEFBScale = SCALE_AUTO;
+    if (Config::Get(Config::GFX_EFB_SCALE) > EFB_SCALE_AUTO_INTEGRAL)
+      Config::SetCurrent(Config::GFX_EFB_SCALE, Config::Get(Config::GFX_EFB_SCALE) - 1);
   }
   if (IsHotkey(HK_TOGGLE_CROP))
   {
-    g_Config.bCrop = !g_Config.bCrop;
+    Config::SetCurrent(Config::GFX_CROP, !Config::Get(Config::GFX_CROP));
   }
   if (IsHotkey(HK_TOGGLE_AR))
   {
     OSDChoice = 2;
     // Toggle aspect ratio
-    g_Config.iAspectRatio = (g_Config.iAspectRatio + 1) & 3;
+    int aspect_ratio = Config::Get(Config::GFX_ASPECT_RATIO);
+    aspect_ratio = (aspect_ratio + 1) & 3;
+    Config::SetCurrent(Config::GFX_ASPECT_RATIO, aspect_ratio);
   }
   if (IsHotkey(HK_TOGGLE_EFBCOPIES))
   {
     OSDChoice = 3;
     // Toggle EFB copies between EFB2RAM and EFB2Texture
-    g_Config.bSkipEFBCopyToRam = !g_Config.bSkipEFBCopyToRam;
+    Config::SetCurrent(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM,
+                       !Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM));
   }
   if (IsHotkey(HK_TOGGLE_FOG))
   {
     OSDChoice = 4;
-    g_Config.bDisableFog = !g_Config.bDisableFog;
+    Config::SetCurrent(Config::GFX_DISABLE_FOG, !Config::Get(Config::GFX_DISABLE_FOG));
   }
   if (IsHotkey(HK_TOGGLE_DUMPTEXTURES))
   {
-    g_Config.bDumpTextures = !g_Config.bDumpTextures;
+    Config::SetCurrent(Config::GFX_DUMP_TEXTURES, !Config::Get(Config::GFX_DUMP_TEXTURES));
   }
   if (IsHotkey(HK_TOGGLE_TEXTURES))
-    g_Config.bHiresTextures = !g_Config.bHiresTextures;
+  {
+    Config::SetCurrent(Config::GFX_HIRES_TEXTURES, !Config::Get(Config::GFX_HIRES_TEXTURES));
+  }
   Core::SetIsThrottlerTempDisabled(IsHotkey(HK_TOGGLE_THROTTLE, true));
   if (IsHotkey(HK_DECREASE_EMULATION_SPEED))
   {
@@ -1503,13 +1539,13 @@ void CFrame::ParseHotkeys()
       // turned off when selecting other stereoscopy modes.
       if (g_Config.sPostProcessingShader == "dubois")
       {
-        g_Config.sPostProcessingShader = "";
+        Config::SetCurrent(Config::GFX_ENHANCE_POST_SHADER, std::string(""));
       }
-      g_Config.iStereoMode = STEREO_SBS;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_SBS));
     }
     else
     {
-      g_Config.iStereoMode = STEREO_OFF;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_OFF));
     }
   }
   if (IsHotkey(HK_TOGGLE_STEREO_TAB))
@@ -1518,13 +1554,13 @@ void CFrame::ParseHotkeys()
     {
       if (g_Config.sPostProcessingShader == "dubois")
       {
-        g_Config.sPostProcessingShader = "";
+        Config::SetCurrent(Config::GFX_ENHANCE_POST_SHADER, std::string(""));
       }
-      g_Config.iStereoMode = STEREO_TAB;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_TAB));
     }
     else
     {
-      g_Config.iStereoMode = STEREO_OFF;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_OFF));
     }
   }
   if (IsHotkey(HK_TOGGLE_STEREO_ANAGLYPH))
@@ -1533,13 +1569,13 @@ void CFrame::ParseHotkeys()
     {
       // Setting the anaglyph mode also requires a specific
       // post-processing shader to be activated.
-      g_Config.iStereoMode = STEREO_ANAGLYPH;
-      g_Config.sPostProcessingShader = "dubois";
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_ANAGLYPH));
+      Config::SetCurrent(Config::GFX_ENHANCE_POST_SHADER, std::string("dubois"));
     }
     else
     {
-      g_Config.iStereoMode = STEREO_OFF;
-      g_Config.sPostProcessingShader = "";
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_OFF));
+      Config::SetCurrent(Config::GFX_ENHANCE_POST_SHADER, std::string(""));
     }
   }
   if (IsHotkey(HK_TOGGLE_STEREO_3DVISION))
@@ -1548,37 +1584,35 @@ void CFrame::ParseHotkeys()
     {
       if (g_Config.sPostProcessingShader == "dubois")
       {
-        g_Config.sPostProcessingShader = "";
+        Config::SetCurrent(Config::GFX_ENHANCE_POST_SHADER, std::string(""));
       }
-      g_Config.iStereoMode = STEREO_3DVISION;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_3DVISION));
     }
     else
     {
-      g_Config.iStereoMode = STEREO_OFF;
+      Config::SetCurrent(Config::GFX_STEREO_MODE, static_cast<int>(STEREO_OFF));
     }
   }
 
   if (IsHotkey(HK_DECREASE_DEPTH, true))
   {
-    if (--g_Config.iStereoDepth < 0)
-      g_Config.iStereoDepth = 0;
+    if (g_Config.iStereoDepth > 0)
+      Config::SetCurrent(Config::GFX_STEREO_DEPTH, g_Config.iStereoDepth - 1);
   }
   if (IsHotkey(HK_INCREASE_DEPTH, true))
   {
-    if (++g_Config.iStereoDepth > 100)
-      g_Config.iStereoDepth = 100;
+    if (g_Config.iStereoDepth < 100)
+      Config::SetCurrent(Config::GFX_STEREO_DEPTH, g_Config.iStereoDepth + 1);
   }
   if (IsHotkey(HK_DECREASE_CONVERGENCE, true))
   {
-    g_Config.iStereoConvergence -= 5;
-    if (g_Config.iStereoConvergence < 0)
-      g_Config.iStereoConvergence = 0;
+    int convergence = std::max(0, g_Config.iStereoConvergence - 5);
+    Config::SetCurrent(Config::GFX_STEREO_CONVERGENCE, convergence);
   }
   if (IsHotkey(HK_INCREASE_CONVERGENCE, true))
   {
-    g_Config.iStereoConvergence += 5;
-    if (g_Config.iStereoConvergence > 500)
-      g_Config.iStereoConvergence = 500;
+    int convergence = std::min(500, g_Config.iStereoConvergence + 5);
+    Config::SetCurrent(Config::GFX_STEREO_CONVERGENCE, convergence);
   }
 
   static float debugSpeed = 1.0f;
@@ -1690,6 +1724,13 @@ void CFrame::HandleFrameSkipHotkeys()
     holdFrameStep = false;
     holdFrameStepDelayCount = 0;
   }
+}
+
+void CFrame::HandleCursorTimer(wxTimerEvent& event)
+{
+  if (!SConfig::GetInstance().bHideCursor && main_frame->RendererHasFocus() &&
+      Core::GetState() == Core::State::Running)
+    m_render_parent->SetCursor(wxCURSOR_BLANK);
 }
 
 void CFrame::HandleSignal(wxTimerEvent& event)

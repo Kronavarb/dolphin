@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstddef>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -13,10 +14,12 @@
 #include <wx/frame.h>
 #include <wx/image.h>
 #include <wx/panel.h>
+#include <wx/string.h>
 #include <wx/timer.h>
 
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
+#include "Core/ConfigManager.h"
 #include "DolphinWX/Globals.h"
 
 #if defined(HAVE_X11) && HAVE_X11
@@ -27,8 +30,10 @@
 #include <IOKit/pwr_mgt/IOPMLib.h>
 #endif
 
+struct BootParameters;
+
 // Class declarations
-class CGameListCtrl;
+class GameListCtrl;
 class CCodeWindow;
 class CConfigMain;
 class CLogWindow;
@@ -44,6 +49,7 @@ class wxAuiNotebook;
 class wxAuiNotebookEvent;
 class wxListEvent;
 class wxMenuItem;
+class wxProgressDialog;
 
 class CRenderFrame : public wxFrame
 {
@@ -93,10 +99,11 @@ public:
 
   void DoStop();
   void UpdateGUI();
-  void UpdateGameList();
+  void GameListRefresh();
+  void GameListRescan(bool purge_cache = false);
   void ToggleLogWindow(bool bShow);
   void ToggleLogConfigWindow(bool bShow);
-  void StatusBarMessage(const char* Text, ...);
+  void StatusBarMessage(const char* format, ...);
   void ClearStatusBar();
   void BootGame(const std::string& filename);
   bool RendererHasFocus();
@@ -138,7 +145,8 @@ private:
     ADD_PANE_CENTER
   };
 
-  CGameListCtrl* m_game_list_ctrl = nullptr;
+  static constexpr int MOUSE_HIDE_DELAY = 3000;
+  GameListCtrl* m_game_list_ctrl = nullptr;
   CConfigMain* m_main_config_dialog = nullptr;
   wxPanel* m_panel = nullptr;
   CRenderFrame* m_render_frame = nullptr;
@@ -148,6 +156,7 @@ private:
   FifoPlayerDlg* m_fifo_player_dialog = nullptr;
   std::array<TASInputDlg*, 8> m_tas_input_dialogs{};
   wxCheatsWindow* m_cheats_window = nullptr;
+  wxProgressDialog* m_progress_dialog = nullptr;
   bool m_use_debugger = false;
   bool m_batch_mode = false;
   bool m_editing_perspectives = false;
@@ -161,6 +170,7 @@ private:
   int m_save_slot = 1;
 
   wxTimer m_poll_hotkey_timer;
+  wxTimer m_cursor_timer;
   wxTimer m_handle_signal_timer;
 
   wxMenuBar* m_menubar_shadow = nullptr;
@@ -182,6 +192,9 @@ private:
 
   void InitializeTASDialogs();
   void InitializeCoreCallbacks();
+
+  void StartGame(std::unique_ptr<BootParameters> boot);
+  void SetDebuggerStartupParameters() const;
 
   // Utility
   wxWindow* GetNotebookPageFromId(wxWindowID Id);
@@ -244,11 +257,9 @@ private:
   void DoFullscreen(bool enable_fullscreen);
   void DoExclusiveFullscreen(bool enable_fullscreen);
   void ToggleDisplayMode(bool bFullscreen);
-  bool TriggerSTMPowerEvent();
   void OnStopped();
   void OnRenderWindowSizeRequest(int width, int height);
-  void UpdateTitle(const std::string& str);
-  static void ConnectWiimote(int wm_idx, bool connect);
+  void UpdateTitle(const wxString& str);
 
   // Event functions
   void PostEvent(wxCommandEvent& event);
@@ -259,7 +270,8 @@ private:
   void OnHelp(wxCommandEvent& event);
 
   void OnReloadThemeBitmaps(wxCommandEvent& event);
-  void OnReloadGameList(wxCommandEvent& event);
+  void OnRefreshGameList(wxCommandEvent& event);
+  void OnRescanGameList(wxCommandEvent& event);
 
   void OnUpdateInterpreterMenuItem(wxUpdateUIEvent& event);
 
@@ -324,6 +336,10 @@ private:
   void OnImportSave(wxCommandEvent& event);
   void OnExportAllSaves(wxCommandEvent& event);
 
+  void OnLoadGameCubeIPLJAP(wxCommandEvent& event);
+  void OnLoadGameCubeIPLUSA(wxCommandEvent& event);
+  void OnLoadGameCubeIPLEUR(wxCommandEvent& event);
+
   void OnNetPlay(wxCommandEvent& event);
 
   void OnShowCheatsWindow(wxCommandEvent& event);
@@ -332,13 +348,14 @@ private:
   void OnUninstallWAD(wxCommandEvent& event);
   void OnImportBootMiiBackup(wxCommandEvent& event);
   void OnExtractCertificates(wxCommandEvent& event);
+  void OnPerformOnlineWiiUpdate(wxCommandEvent& event);
+  void OnPerformDiscWiiUpdate(wxCommandEvent& event);
   void OnFifoPlayer(wxCommandEvent& event);
   void OnConnectWiimote(wxCommandEvent& event);
   void GameListChanged(wxCommandEvent& event);
 
   void OnGameListCtrlItemActivated(wxListEvent& event);
   void OnRenderParentResize(wxSizeEvent& event);
-  void StartGame(const std::string& filename);
   void OnChangeColumnsVisible(wxCommandEvent& event);
 
   void OnSelectSlot(wxCommandEvent& event);
@@ -347,10 +364,11 @@ private:
 
   void PollHotkeys(wxTimerEvent&);
   void ParseHotkeys();
+  void HandleCursorTimer(wxTimerEvent&);
   void HandleSignal(wxTimerEvent&);
 
   bool InitControllers();
 
   // Event table
-  DECLARE_EVENT_TABLE();
+  DECLARE_EVENT_TABLE()
 };

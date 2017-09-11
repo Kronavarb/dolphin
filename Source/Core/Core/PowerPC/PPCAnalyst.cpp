@@ -2,16 +2,19 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/PowerPC/PPCAnalyst.h"
+
 #include <algorithm>
+#include <map>
 #include <queue>
 #include <string>
+#include <vector>
 
+#include "Common/Assert.h"
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
-#include "Core/PowerPC/JitCommon/JitCache.h"
-#include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 #include "Core/PowerPC/PPCTables.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -82,8 +85,8 @@ static u32 EvaluateBranchTarget(UGeckoInstruction instr, u32 pc)
 // one blr or rfi, and keep scanning.
 bool AnalyzeFunction(u32 startAddr, Symbol& func, int max_size)
 {
-  if (!func.name.size())
-    func.name = StringFromFormat("zz_%07x_", startAddr & 0x0FFFFFFF);
+  if (func.name.empty())
+    func.Rename(StringFromFormat("zz_%07x_", startAddr & 0x0FFFFFFF));
   if (func.analyzed)
     return true;  // No error, just already did it.
 
@@ -187,6 +190,14 @@ bool AnalyzeFunction(u32 startAddr, Symbol& func, int max_size)
       return false;
     }
   }
+}
+
+bool ReanalyzeFunction(u32 start_addr, Symbol& func, int max_size)
+{
+  _assert_msg_(OSHLE, func.analyzed, "The function wasn't previously analyzed!");
+
+  func.analyzed = false;
+  return AnalyzeFunction(start_addr, func, max_size);
 }
 
 // Second pass analysis, done after the first pass is done for all functions
@@ -330,7 +341,7 @@ static void FindFunctionsFromHandlers(PPCSymbolDB* func_db)
       Symbol* f = func_db->AddFunction(entry.first);
       if (!f)
         continue;
-      f->name = entry.second;
+      f->Rename(entry.second);
     }
   }
 }
@@ -396,9 +407,9 @@ void FindFunctions(u32 startAddr, u32 endAddr, PPCSymbolDB* func_db)
     if (f.name.substr(0, 3) == "zzz")
     {
       if (f.flags & FFLAG_LEAF)
-        f.name += "_leaf";
+        f.Rename(f.name + "_leaf");
       if (f.flags & FFLAG_STRAIGHT)
-        f.name += "_straight";
+        f.Rename(f.name + "_straight");
     }
     if (f.flags & FFLAG_LEAF)
     {
@@ -719,8 +730,8 @@ u32 PPCAnalyzer::Analyze(u32 address, CodeBlock* block, CodeBuffer* buffer, u32 
     code[i].opinfo = opinfo;
     code[i].address = address;
     code[i].inst = inst;
-    code[i].branchTo = -1;
-    code[i].branchToIndex = -1;
+    code[i].branchTo = UINT32_MAX;
+    code[i].branchToIndex = UINT32_MAX;
     code[i].skip = false;
     block->m_stats->numCycles += opinfo->numCycles;
     block->m_physical_addresses.insert(result.physical_address);

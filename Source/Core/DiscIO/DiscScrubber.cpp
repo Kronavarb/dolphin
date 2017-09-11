@@ -2,21 +2,24 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "DiscIO/DiscScrubber.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <cstddef>
 #include <cstdio>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
-#include "Common/FileUtil.h"
+#include "Common/File.h"
 #include "Common/Logging/Log.h"
-#include "DiscIO/DiscScrubber.h"
+
+#include "DiscIO/DiscExtractor.h"
 #include "DiscIO/Filesystem.h"
 #include "DiscIO/Volume.h"
-#include "DiscIO/VolumeCreator.h"
 
 namespace DiscIO
 {
@@ -125,16 +128,18 @@ void DiscScrubber::MarkAsUsedE(u64 partition_data_offset, u64 offset, u64 size)
 // Helper functions for reading the BE volume
 bool DiscScrubber::ReadFromVolume(u64 offset, u32& buffer, const Partition& partition)
 {
-  return m_disc->ReadSwapped(offset, &buffer, partition);
+  std::optional<u32> value = m_disc->ReadSwapped<u32>(offset, partition);
+  if (value)
+    buffer = *value;
+  return value.has_value();
 }
 
 bool DiscScrubber::ReadFromVolume(u64 offset, u64& buffer, const Partition& partition)
 {
-  u32 temp_buffer;
-  if (!m_disc->ReadSwapped(offset, &temp_buffer, partition))
-    return false;
-  buffer = static_cast<u64>(temp_buffer) << 2;
-  return true;
+  std::optional<u64> value = m_disc->ReadSwappedAndShifted(offset, partition);
+  if (value)
+    buffer = *value;
+  return value.has_value();
 }
 
 bool DiscScrubber::ParseDisc()
@@ -177,7 +182,7 @@ bool DiscScrubber::ParseDisc()
 // Operations dealing with encrypted space are done here
 bool DiscScrubber::ParsePartitionData(const Partition& partition, PartitionHeader* header)
 {
-  std::unique_ptr<IFileSystem> filesystem(CreateFileSystem(m_disc.get(), partition));
+  std::unique_ptr<FileSystem> filesystem(CreateFileSystem(m_disc.get(), partition));
   if (!filesystem)
   {
     ERROR_LOG(DISCIO, "Failed to read file system for the partition at 0x%" PRIx64,
@@ -198,10 +203,14 @@ bool DiscScrubber::ParsePartitionData(const Partition& partition, PartitionHeade
               0x2440 + header->apploader_size + header->apploader_trailer_size);
 
   // DOL
-  header->dol_offset = filesystem->GetBootDOLOffset();
-  header->dol_size = filesystem->GetBootDOLSize(header->dol_offset);
-  if (header->dol_offset == 0 || header->dol_size == 0)
+  const std::optional<u64> dol_offset = GetBootDOLOffset(*m_disc, partition);
+  if (!dol_offset)
     return false;
+  const std::optional<u64> dol_size = GetBootDOLSize(*m_disc, partition, *dol_offset);
+  if (!dol_size)
+    return false;
+  header->dol_offset = *dol_offset;
+  header->dol_size = *dol_size;
   MarkAsUsedE(partition_data_offset, header->dol_offset, header->dol_size);
 
   // FST
@@ -213,14 +222,21 @@ bool DiscScrubber::ParsePartitionData(const Partition& partition, PartitionHeade
   MarkAsUsedE(partition_data_offset, header->fst_offset, header->fst_size);
 
   // Go through the filesystem and mark entries as used
-  for (const SFileInfo& file : filesystem->GetFileList())
-  {
-    DEBUG_LOG(DISCIO, "%s", file.m_FullPath.empty() ? "/" : file.m_FullPath.c_str());
-    if ((file.m_NameOffset & 0x1000000) == 0)
-      MarkAsUsedE(partition_data_offset, file.m_Offset, file.m_FileSize);
-  }
+  ParseFileSystemData(partition_data_offset, filesystem->GetRoot());
 
   return true;
+}
+
+void DiscScrubber::ParseFileSystemData(u64 partition_data_offset, const FileInfo& directory)
+{
+  for (const DiscIO::FileInfo& file_info : directory)
+  {
+    DEBUG_LOG(DISCIO, "Scrubbing %s", file_info.GetPath().c_str());
+    if (file_info.IsDirectory())
+      ParseFileSystemData(partition_data_offset, file_info);
+    else
+      MarkAsUsedE(partition_data_offset, file_info.GetOffset(), file_info.GetSize());
+  }
 }
 
 }  // namespace DiscIO

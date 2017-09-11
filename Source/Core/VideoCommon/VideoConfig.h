@@ -22,6 +22,8 @@
 #define CONF_SAVETARGETS 8
 #define CONF_SAVESHADERS 16
 
+constexpr int EFB_SCALE_AUTO_INTEGRAL = 0;
+
 enum AspectMode
 {
   ASPECT_AUTO = 0,
@@ -30,40 +32,36 @@ enum AspectMode
   ASPECT_STRETCH = 3,
 };
 
-enum EFBScale
-{
-  SCALE_FORCE_INTEGRAL = -1,
-  SCALE_AUTO,
-  SCALE_AUTO_INTEGRAL,
-  SCALE_1X,
-  SCALE_1_5X,
-  SCALE_2X,
-  SCALE_2_5X,
-};
-
 enum StereoMode
 {
   STEREO_OFF = 0,
   STEREO_SBS,
   STEREO_TAB,
   STEREO_ANAGLYPH,
+  STEREO_QUADBUFFER,
   STEREO_3DVISION
+};
+
+struct ProjectionHackConfig final
+{
+  bool m_enable;
+  bool m_sznear;
+  bool m_szfar;
+  std::string m_znear;
+  std::string m_zfar;
 };
 
 // NEVER inherit from this class.
 struct VideoConfig final
 {
   VideoConfig();
-  void Load(const std::string& ini_file);
-  void GameIniLoad();
+  void Refresh();
   void VerifyValidity();
-  void Save(const std::string& ini_file);
   void UpdateProjectionHack();
   bool IsVSync();
 
   // General
   bool bVSync;
-  bool bRunning;
   bool bWidescreenHack;
   int iAspectRatio;
   bool bCrop;  // Aspect ratio controls.
@@ -72,7 +70,7 @@ struct VideoConfig final
   bool bShaderCache;
 
   // Enhancements
-  int iMultisamples;
+  u32 iMultisamples;
   bool bSSAA;
   int iEFBScale;
   bool bForceFiltering;
@@ -122,8 +120,7 @@ struct VideoConfig final
   bool bSkipEFBCopyToRam;
   bool bCopyEFBScaled;
   int iSafeTextureCache_ColorSamples;
-  int iPhackvalue[3];
-  std::string sPhackvalue[2];
+  ProjectionHackConfig phack;
   float fAspectRatioHackW, fAspectRatioHackH;
   bool bEnablePixelLighting;
   bool bFastDepthCalc;
@@ -162,6 +159,32 @@ struct VideoConfig final
   // Currently only supported with Vulkan.
   int iCommandBufferExecuteInterval;
 
+  // The following options determine the ubershader mode:
+  //   No ubershaders:
+  //     - bBackgroundShaderCompiling = false
+  //     - bDisableSpecializedShaders = false
+  //   Hybrid/background compiling:
+  //     - bBackgroundShaderCompiling = true
+  //     - bDisableSpecializedShaders = false
+  //   Ubershaders only:
+  //     - bBackgroundShaderCompiling = false
+  //     - bDisableSpecializedShaders = true
+
+  // Enable background shader compiling, use ubershaders while waiting.
+  bool bBackgroundShaderCompiling;
+
+  // Use ubershaders only, don't compile specialized shaders.
+  bool bDisableSpecializedShaders;
+
+  // Precompile ubershader variants at boot/config reload time.
+  bool bPrecompileUberShaders;
+
+  // Number of shader compiler threads.
+  // 0 disables background compilation.
+  // -1 uses an automatic number based on the CPU threads.
+  int iShaderCompilerThreads;
+  int iShaderPrecompilerThreads;
+
   // Static config per API
   // TODO: Move this out of VideoConfig
   struct
@@ -169,7 +192,7 @@ struct VideoConfig final
     APIType api_type;
 
     std::vector<std::string> Adapters;  // for D3D
-    std::vector<int> AAModes;
+    std::vector<u32> AAModes;
 
     // TODO: merge AdapterName and Adapters array
     std::string AdapterName;  // for OpenGL
@@ -198,6 +221,9 @@ struct VideoConfig final
     bool bSupportsInternalResolutionFrameDumps;
     bool bSupportsGPUTextureDecoding;
     bool bSupportsST3CTextures;
+    bool bSupportsBitfield;                // Needed by UberShaders, so must stay in VideoCommon
+    bool bSupportsDynamicSamplerIndexing;  // Needed by UberShaders, so must stay in VideoCommon
+    bool bSupportsBPTCTextures;
   } backend_info;
 
   // Utility
@@ -217,6 +243,11 @@ struct VideoConfig final
   {
     return backend_info.bSupportsGPUTextureDecoding && bEnableGPUTextureDecoding;
   }
+  bool UseVertexRounding() const { return bVertexRounding && iEFBScale != 1; }
+  u32 GetShaderCompilerThreads() const;
+  u32 GetShaderPrecompilerThreads() const;
+  bool CanPrecompileUberShaders() const;
+  bool CanBackgroundCompileShaders() const;
 };
 
 extern VideoConfig g_Config;

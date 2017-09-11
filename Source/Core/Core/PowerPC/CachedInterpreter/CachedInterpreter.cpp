@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "Core/PowerPC/CachedInterpreter/CachedInterpreter.h"
+
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 #include "Core/ConfigManager.h"
@@ -199,7 +200,6 @@ void CachedInterpreter::Jit(u32 address)
 
   b->checkedEntry = GetCodePtr();
   b->normalEntry = GetCodePtr();
-  b->runCount = 0;
 
   for (u32 i = 0; i < code_block.m_num_instructions; i++)
   {

@@ -12,6 +12,7 @@
 #include "Common/CommonTypes.h"
 #include "Common/Logging/Log.h"
 
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/HW/Memmap.h"
 
 #include "VideoBackends/Software/EfbCopy.h"
@@ -46,7 +47,6 @@ void SWRenderer::Init()
 
 void SWRenderer::Shutdown()
 {
-  g_Config.bRunning = false;
   UpdateActiveConfig();
 }
 
@@ -142,7 +142,9 @@ void SWRenderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight,
 
   // virtual XFB is not supported
   if (g_ActiveConfig.bUseXFB)
-    g_ActiveConfig.bUseRealXFB = true;
+  {
+    Config::SetCurrent(Config::GFX_USE_REAL_XFB, true);
+  }
 }
 
 u32 SWRenderer::AccessEFB(EFBAccessType type, u32 x, u32 y, u32 InputData)

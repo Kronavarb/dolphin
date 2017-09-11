@@ -4,7 +4,7 @@
 
 #include "AudioCommon/AudioCommon.h"
 #include "AudioCommon/AlsaSoundStream.h"
-#include "AudioCommon/CoreAudioSoundStream.h"
+#include "AudioCommon/CubebStream.h"
 #include "AudioCommon/Mixer.h"
 #include "AudioCommon/NullSoundStream.h"
 #include "AudioCommon/OpenALStream.h"
@@ -30,7 +30,9 @@ static const int AUDIO_VOLUME_MAX = 100;
 void InitSoundStream()
 {
   std::string backend = SConfig::GetInstance().sBackend;
-  if (backend == BACKEND_OPENAL && OpenALStream::isValid())
+  if (backend == BACKEND_CUBEB)
+    g_sound_stream = std::make_unique<CubebStream>();
+  else if (backend == BACKEND_OPENAL && OpenALStream::isValid())
     g_sound_stream = std::make_unique<OpenALStream>();
   else if (backend == BACKEND_NULLSOUND)
     g_sound_stream = std::make_unique<NullSound>();
@@ -43,8 +45,6 @@ void InitSoundStream()
   }
   else if (backend == BACKEND_ALSA && AlsaSound::isValid())
     g_sound_stream = std::make_unique<AlsaSound>();
-  else if (backend == BACKEND_COREAUDIO && CoreAudioSound::isValid())
-    g_sound_stream = std::make_unique<CoreAudioSound>();
   else if (backend == BACKEND_PULSEAUDIO && PulseAudio::isValid())
     g_sound_stream = std::make_unique<PulseAudio>();
   else if (backend == BACKEND_OPENSLES && OpenSLESStream::isValid())
@@ -98,7 +98,7 @@ std::string GetDefaultSoundBackend()
   if (AlsaSound::isValid())
     backend = BACKEND_ALSA;
 #elif defined __APPLE__
-  backend = BACKEND_COREAUDIO;
+  backend = BACKEND_CUBEB;
 #elif defined _WIN32
   backend = BACKEND_XAUDIO2;
 #endif
@@ -110,12 +110,11 @@ std::vector<std::string> GetSoundBackends()
   std::vector<std::string> backends;
 
   backends.push_back(BACKEND_NULLSOUND);
+  backends.push_back(BACKEND_CUBEB);
   if (XAudio2_7::isValid() || XAudio2::isValid())
     backends.push_back(BACKEND_XAUDIO2);
   if (AlsaSound::isValid())
     backends.push_back(BACKEND_ALSA);
-  if (CoreAudioSound::isValid())
-    backends.push_back(BACKEND_COREAUDIO);
   if (PulseAudio::isValid())
     backends.push_back(BACKEND_PULSEAUDIO);
   if (OpenALStream::isValid())
@@ -131,6 +130,8 @@ bool SupportsDPL2Decoder(const std::string& backend)
   if (backend == BACKEND_OPENAL)
     return true;
 #endif
+  if (backend == BACKEND_CUBEB)
+    return true;
   if (backend == BACKEND_PULSEAUDIO)
     return true;
   return false;
@@ -146,7 +147,7 @@ bool SupportsVolumeChanges(const std::string& backend)
   // FIXME: this one should ask the backend whether it supports it.
   //       but getting the backend from string etc. is probably
   //       too much just to enable/disable a stupid slider...
-  return backend == BACKEND_COREAUDIO || backend == BACKEND_OPENAL || backend == BACKEND_XAUDIO2;
+  return backend == BACKEND_CUBEB || backend == BACKEND_OPENAL || backend == BACKEND_XAUDIO2;
 }
 
 void UpdateSoundStream()
@@ -174,7 +175,7 @@ void SendAIBuffer(const short* samples, unsigned int num_samples)
   else if (!SConfig::GetInstance().m_DumpAudio && s_audio_dump_start)
     StopAudioDump();
 
-  CMixer* pMixer = g_sound_stream->GetMixer();
+  Mixer* pMixer = g_sound_stream->GetMixer();
 
   if (pMixer && samples)
   {

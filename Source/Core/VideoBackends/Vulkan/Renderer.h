@@ -56,7 +56,7 @@ public:
   void ResetAPIState() override;
   void RestoreAPIState() override;
 
-  void SetBlendMode(bool force_update) override;
+  void SetBlendingState(const BlendingState& state) override;
   void SetScissorRect(const EFBRectangle& rc) override;
   void SetGenerationMode() override;
   void SetDepthMode() override;
@@ -87,7 +87,10 @@ private:
   bool CompileShaders();
   void DestroyShaders();
 
-  void ResolveEFBForSwap(const TargetRectangle& scaled_rect);
+  // Transitions EFB/XFB buffers to SHADER_READ_ONLY, ready for presenting/dumping.
+  // If MSAA is enabled, and XFB is disabled, also resolves the EFB buffer.
+  void TransitionBuffersForSwap(const TargetRectangle& scaled_rect,
+                                const XFBSourceBase* const* xfb_sources, u32 xfb_count);
 
   // Draw either the EFB, or specified XFB sources to the currently-bound framebuffer.
   void DrawFrame(VkRenderPass render_pass, const TargetRectangle& target_rect,

@@ -3,297 +3,198 @@
 // Refer to the license.txt file included.
 
 #include <QDir>
+#include <QSettings>
 #include <QSize>
 
+#include "AudioCommon/AudioCommon.h"
+#include "Common/FileSearch.h"
 #include "Common/FileUtil.h"
+#include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
+#include "DolphinQt2/GameList/GameListModel.h"
 #include "DolphinQt2/Settings.h"
+#include "InputCommon/InputConfig.h"
 
-static QString GetSettingsPath()
+Settings::Settings() = default;
+
+Settings& Settings::Instance()
 {
-  return QString::fromStdString(File::GetUserPath(D_CONFIG_IDX)) + QStringLiteral("/UI.ini");
+  static Settings settings;
+  return settings;
 }
 
-Settings::Settings(QObject* parent) : QSettings(GetSettingsPath(), QSettings::IniFormat, parent)
+void Settings::SetThemeName(const QString& theme_name)
 {
+  SConfig::GetInstance().theme_name = theme_name.toStdString();
+  emit ThemeChanged();
 }
 
-QString Settings::GetThemeDir() const
+QString Settings::GetProfilesDir() const
 {
-  QString theme_name = value(QStringLiteral("Theme"), QStringLiteral("Clean")).toString();
-  return QString::fromStdString(File::GetThemeDir(theme_name.toStdString()));
+  return QString::fromStdString(File::GetUserPath(D_CONFIG_IDX) + "Profiles/");
 }
 
-QString Settings::GetResourcesDir() const
+QString Settings::GetProfileINIPath(const InputConfig* config, const QString& name) const
 {
-  return QString::fromStdString(File::GetSysDirectory().append("Resources"))
-      .append(QDir::separator());
-}
-
-bool Settings::IsInDevelopmentWarningEnabled() const
-{
-  // There's intentionally no way to set this from the UI.
-  // Add it to your INI manually instead.
-  return value(QStringLiteral("ShowDevelopmentWarning"), true).toBool();
-}
-
-QString Settings::GetLastGame() const
-{
-  return value(QStringLiteral("GameList/LastGame")).toString();
-}
-
-void Settings::SetLastGame(const QString& path)
-{
-  setValue(QStringLiteral("GameList/LastGame"), path);
+  return GetProfilesDir() + QString::fromStdString(config->GetProfileName()) + QDir::separator() +
+         name + QStringLiteral(".ini");
 }
 
 QStringList Settings::GetPaths() const
 {
-  return value(QStringLiteral("GameList/Paths")).toStringList();
+  QStringList list;
+  for (const auto& path : SConfig::GetInstance().m_ISOFolder)
+    list << QString::fromStdString(path);
+  return list;
 }
 
-void Settings::SetPaths(const QStringList& paths)
+void Settings::AddPath(const QString& qpath)
 {
-  setValue(QStringLiteral("GameList/Paths"), paths);
+  std::string path = qpath.toStdString();
+
+  std::vector<std::string>& paths = SConfig::GetInstance().m_ISOFolder;
+  if (std::find(paths.begin(), paths.end(), path) != paths.end())
+    return;
+
+  paths.emplace_back(path);
+  emit PathAdded(qpath);
 }
 
-void Settings::RemovePath(int i)
+void Settings::RemovePath(const QString& qpath)
 {
-  QStringList paths = GetPaths();
-  paths.removeAt(i);
-  SetPaths(paths);
-}
+  std::string path = qpath.toStdString();
+  std::vector<std::string>& paths = SConfig::GetInstance().m_ISOFolder;
 
-QString Settings::GetDefaultGame() const
-{
-  return QString::fromStdString(SConfig::GetInstance().m_strDefaultISO);
-}
+  auto new_end = std::remove(paths.begin(), paths.end(), path);
+  if (new_end == paths.end())
+    return;
 
-void Settings::SetDefaultGame(const QString& path)
-{
-  SConfig::GetInstance().m_strDefaultISO = path.toStdString();
-  SConfig::GetInstance().SaveSettings();
-}
-
-QString Settings::GetDVDRoot() const
-{
-  return QString::fromStdString(SConfig::GetInstance().m_strDVDRoot);
-}
-
-void Settings::SetDVDRoot(const QString& path)
-{
-  SConfig::GetInstance().m_strDVDRoot = path.toStdString();
-  SConfig::GetInstance().SaveSettings();
-}
-
-QString Settings::GetApploader() const
-{
-  return QString::fromStdString(SConfig::GetInstance().m_strApploader);
-}
-
-void Settings::SetApploader(const QString& path)
-{
-  SConfig::GetInstance().m_strApploader = path.toStdString();
-  SConfig::GetInstance().SaveSettings();
-}
-
-QString Settings::GetWiiNAND() const
-{
-  return QString::fromStdString(SConfig::GetInstance().m_NANDPath);
-}
-
-void Settings::SetWiiNAND(const QString& path)
-{
-  SConfig::GetInstance().m_NANDPath = path.toStdString();
-  SConfig::GetInstance().SaveSettings();
-}
-
-float Settings::GetEmulationSpeed() const
-{
-  return SConfig::GetInstance().m_EmulationSpeed;
-}
-
-void Settings::SetEmulationSpeed(float val)
-{
-  SConfig::GetInstance().m_EmulationSpeed = val;
-}
-
-bool Settings::GetForceNTSCJ() const
-{
-  return SConfig::GetInstance().bForceNTSCJ;
-}
-
-void Settings::SetForceNTSCJ(bool val)
-{
-  SConfig::GetInstance().bForceNTSCJ = val;
-}
-
-bool Settings::GetAnalyticsEnabled() const
-{
-  return SConfig::GetInstance().m_analytics_enabled;
-}
-
-void Settings::SetAnalyticsEnabled(bool val)
-{
-  SConfig::GetInstance().m_analytics_enabled = val;
-}
-
-DiscIO::Language Settings::GetWiiSystemLanguage() const
-{
-  return SConfig::GetInstance().GetCurrentLanguage(true);
-}
-
-DiscIO::Language Settings::GetGCSystemLanguage() const
-{
-  return SConfig::GetInstance().GetCurrentLanguage(false);
+  paths.erase(new_end, paths.end());
+  emit PathRemoved(qpath);
 }
 
 bool Settings::GetPreferredView() const
 {
-  return value(QStringLiteral("PreferredView"), true).toBool();
+  return QSettings().value(QStringLiteral("PreferredView"), true).toBool();
 }
 
-void Settings::SetPreferredView(bool table)
+void Settings::SetPreferredView(bool list)
 {
-  setValue(QStringLiteral("PreferredView"), table);
-}
-
-bool Settings::GetConfirmStop() const
-{
-  return value(QStringLiteral("Emulation/ConfirmStop"), true).toBool();
+  QSettings().setValue(QStringLiteral("PreferredView"), list);
 }
 
 int Settings::GetStateSlot() const
 {
-  return value(QStringLiteral("Emulation/StateSlot"), 1).toInt();
+  return QSettings().value(QStringLiteral("Emulation/StateSlot"), 1).toInt();
 }
 
 void Settings::SetStateSlot(int slot)
 {
-  setValue(QStringLiteral("Emulation/StateSlot"), slot);
+  QSettings().setValue(QStringLiteral("Emulation/StateSlot"), slot);
 }
 
-bool Settings::GetRenderToMain() const
+void Settings::SetHideCursor(bool hide_cursor)
 {
-  return value(QStringLiteral("Graphics/RenderToMain"), false).toBool();
+  SConfig::GetInstance().bHideCursor = hide_cursor;
+  emit HideCursorChanged();
 }
 
-bool Settings::GetFullScreen() const
+bool Settings::GetHideCursor() const
 {
-  return value(QStringLiteral("Graphics/FullScreen"), false).toBool();
+  return SConfig::GetInstance().bHideCursor;
 }
 
-QSize Settings::GetRenderWindowSize() const
+int Settings::GetVolume() const
 {
-  return value(QStringLiteral("Graphics/RenderWindowSize"), QSize(640, 480)).toSize();
+  return SConfig::GetInstance().m_Volume;
 }
 
-bool& Settings::BannerVisible() const
+void Settings::SetVolume(int volume)
 {
-  return SConfig::GetInstance().m_showBannerColumn;
+  if (GetVolume() != volume)
+  {
+    SConfig::GetInstance().m_Volume = volume;
+    emit VolumeChanged(volume);
+  }
 }
 
-bool& Settings::CountryVisible() const
+void Settings::IncreaseVolume(int volume)
 {
-  return SConfig::GetInstance().m_showRegionColumn;
+  AudioCommon::IncreaseVolume(volume);
+  emit VolumeChanged(GetVolume());
 }
 
-bool& Settings::DescriptionVisible() const
+void Settings::DecreaseVolume(int volume)
 {
-  return SConfig::GetInstance().m_showDescriptionColumn;
+  AudioCommon::DecreaseVolume(volume);
+  emit VolumeChanged(GetVolume());
 }
 
-bool& Settings::FilenameVisible() const
+QVector<QString> Settings::GetProfiles(const InputConfig* config) const
 {
-  return SConfig::GetInstance().m_showFileNameColumn;
+  const std::string path = GetProfilesDir().toStdString() + config->GetProfileName();
+  QVector<QString> vec;
+
+  for (const auto& file : Common::DoFileSearch({path}, {".ini"}))
+  {
+    std::string basename;
+    SplitPath(file, nullptr, &basename, nullptr);
+    vec.push_back(QString::fromStdString(basename));
+  }
+
+  return vec;
 }
 
-bool& Settings::IDVisible() const
+bool Settings::IsLogVisible() const
 {
-  return SConfig::GetInstance().m_showIDColumn;
+  return QSettings().value(QStringLiteral("logging/logvisible")).toBool();
 }
 
-bool& Settings::MakerVisible() const
+void Settings::SetLogVisible(bool visible)
 {
-  return SConfig::GetInstance().m_showMakerColumn;
+  if (IsLogVisible() != visible)
+  {
+    QSettings().setValue(QStringLiteral("logging/logvisible"), visible);
+    emit LogVisibilityChanged(visible);
+  }
 }
 
-bool& Settings::PlatformVisible() const
+bool Settings::IsLogConfigVisible() const
 {
-  return SConfig::GetInstance().m_showSystemColumn;
+  return QSettings().value(QStringLiteral("logging/logconfigvisible")).toBool();
 }
 
-bool& Settings::TitleVisible() const
+void Settings::SetLogConfigVisible(bool visible)
 {
-  return SConfig::GetInstance().m_showTitleColumn;
+  if (IsLogConfigVisible() != visible)
+  {
+    QSettings().setValue(QStringLiteral("logging/logconfigvisible"), visible);
+    emit LogConfigVisibilityChanged(visible);
+  }
 }
 
-bool& Settings::SizeVisible() const
+GameListModel* Settings::GetGameListModel() const
 {
-  return SConfig::GetInstance().m_showSizeColumn;
+  static GameListModel* model = new GameListModel;
+  return model;
 }
 
-bool& Settings::StateVisible() const
+NetPlayClient* Settings::GetNetPlayClient()
 {
-  return SConfig::GetInstance().m_showStateColumn;
+  return m_client.get();
 }
 
-bool Settings::IsBluetoothPassthroughEnabled() const
+void Settings::ResetNetPlayClient(NetPlayClient* client)
 {
-  return SConfig::GetInstance().m_bt_passthrough_enabled;
+  m_client.reset(client);
 }
 
-void Settings::SetBluetoothPassthroughEnabled(bool enabled)
+NetPlayServer* Settings::GetNetPlayServer()
 {
-  SConfig::GetInstance().m_bt_passthrough_enabled = enabled;
+  return m_server.get();
 }
 
-bool Settings::IsContinuousScanningEnabled() const
+void Settings::ResetNetPlayServer(NetPlayServer* server)
 {
-  return SConfig::GetInstance().m_WiimoteContinuousScanning;
-}
-
-void Settings::SetContinuousScanningEnabled(bool enabled)
-{
-  SConfig::GetInstance().m_WiimoteContinuousScanning = enabled;
-}
-
-bool Settings::IsBackgroundInputEnabled() const
-{
-  return SConfig::GetInstance().m_BackgroundInput;
-}
-
-void Settings::SetBackgroundInputEnabled(bool enabled)
-{
-  SConfig::GetInstance().m_BackgroundInput = enabled;
-}
-
-bool Settings::IsWiimoteSpeakerEnabled() const
-{
-  return SConfig::GetInstance().m_WiimoteEnableSpeaker;
-}
-
-void Settings::SetWiimoteSpeakerEnabled(bool enabled)
-{
-  SConfig::GetInstance().m_WiimoteEnableSpeaker = enabled;
-}
-
-SerialInterface::SIDevices Settings::GetSIDevice(size_t i) const
-{
-  return SConfig::GetInstance().m_SIDevice[i];
-}
-
-void Settings::SetSIDevice(size_t i, SerialInterface::SIDevices device)
-{
-  SConfig::GetInstance().m_SIDevice[i] = device;
-}
-
-bool Settings::IsWiiGameRunning() const
-{
-  return SConfig::GetInstance().bWii;
-}
-
-void Settings::Save()
-{
-  return SConfig::GetInstance().SaveSettings();
+  m_server.reset(server);
 }

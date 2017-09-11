@@ -2,23 +2,23 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include <QApplication>
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
-#include <QFormLayout>
+#include <QGridLayout>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
-#include <QPixmap>
 #include <QPushButton>
 #include <QRadioButton>
-#include <QSpacerItem>
+#include <QScreen>
 #include <QVBoxLayout>
 
-#include <unordered_map>
+#include <map>
 
 #include "Core/ConfigManager.h"
 #include "Core/HW/SI/SI.h"
@@ -27,18 +27,19 @@
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/USB/Bluetooth/BTReal.h"
 #include "Core/NetPlayProto.h"
+#include "DolphinQt2/Config/Mapping/MappingWindow.h"
 #include "DolphinQt2/Settings.h"
 #include "UICommon/UICommon.h"
 
 #include "DolphinQt2/Config/ControllersWindow.h"
 
-static const std::unordered_map<SerialInterface::SIDevices, int> s_gc_types = {
+static const std::map<SerialInterface::SIDevices, int> s_gc_types = {
     {SerialInterface::SIDEVICE_NONE, 0},         {SerialInterface::SIDEVICE_GC_CONTROLLER, 1},
     {SerialInterface::SIDEVICE_WIIU_ADAPTER, 2}, {SerialInterface::SIDEVICE_GC_STEERING, 3},
     {SerialInterface::SIDEVICE_DANCEMAT, 4},     {SerialInterface::SIDEVICE_GC_TARUKONGA, 5},
     {SerialInterface::SIDEVICE_GC_GBA, 6},       {SerialInterface::SIDEVICE_GC_KEYBOARD, 7}};
 
-static const std::unordered_map<int, int> s_wiimote_types = {
+static const std::map<int, int> s_wiimote_types = {
     {WIIMOTE_SRC_NONE, 0}, {WIIMOTE_SRC_EMU, 1}, {WIIMOTE_SRC_REAL, 2}, {WIIMOTE_SRC_HYBRID, 3}};
 
 static int ToGCMenuIndex(const SerialInterface::SIDevices sidevice)
@@ -65,13 +66,10 @@ static int FromWiimoteMenuIndex(const int menudevice)
   return it->first;
 }
 
-ControllersWindow::ControllersWindow(QWidget* parent)
-    : QDialog(parent),
-      m_configure_icon(Settings().GetThemeDir().append(QStringLiteral("config.png"))),
-      m_gamecube_icon(Settings().GetResourcesDir().append(QStringLiteral("Platform_Gamecube.png"))),
-      m_wii_icon(Settings().GetResourcesDir().append(QStringLiteral("Platform_Wii.png")))
+ControllersWindow::ControllersWindow(QWidget* parent) : QDialog(parent)
 {
   setWindowTitle(tr("Controller Settings"));
+  setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
   CreateGamecubeLayout();
   CreateWiimoteLayout();
@@ -79,25 +77,26 @@ ControllersWindow::ControllersWindow(QWidget* parent)
   CreateMainLayout();
   LoadSettings();
   ConnectWidgets();
+
+  for (size_t i = 0; i < m_gc_mappings.size(); i++)
+    m_gc_mappings[i] = new MappingWindow(this, static_cast<int>(i));
+
+  for (size_t i = 0; i < m_wiimote_mappings.size(); i++)
+    m_wiimote_mappings[i] = new MappingWindow(this, static_cast<int>(i));
 }
 
 void ControllersWindow::CreateGamecubeLayout()
 {
-  m_gc_box = new QGroupBox(m_gc_label);
-  m_gc_layout = new QFormLayout();
-  m_gc_label = new QLabel();
-  m_gc_label->setPixmap(QPixmap(m_gamecube_icon));
-  m_gc_label->setAlignment(Qt::AlignCenter);
-  m_gc_layout->addRow(m_gc_label);
+  m_gc_box = new QGroupBox(tr("GameCube Controllers"));
+  m_gc_layout = new QGridLayout();
+  m_gc_layout->setVerticalSpacing(7);
+  m_gc_layout->setColumnStretch(1, 1);
 
   for (size_t i = 0; i < m_gc_groups.size(); i++)
   {
+    auto* gc_label = new QLabel(tr("Port %1").arg(i + 1));
     auto* gc_box = m_gc_controller_boxes[i] = new QComboBox();
-    auto* gc_button = m_gc_buttons[i] = new QPushButton(QIcon(m_configure_icon), QString());
-    auto* gc_group = m_gc_groups[i] = new QHBoxLayout();
-
-    gc_box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    gc_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    auto* gc_button = m_gc_buttons[i] = new QPushButton(tr("Configure"));
 
     for (const auto& item :
          {tr("None"), tr("Standard Controller"), tr("GameCube Adapter for Wii U"),
@@ -106,85 +105,92 @@ void ControllersWindow::CreateGamecubeLayout()
       gc_box->addItem(item);
     }
 
-    gc_group->addItem(new QSpacerItem(42, 1));
-    gc_group->addWidget(gc_box);
-    gc_group->addWidget(gc_button);
-
-    m_gc_layout->addRow(tr("Controller %1").arg(i + 1), gc_group);
+    int controller_row = m_gc_layout->rowCount();
+    m_gc_layout->addWidget(gc_label, controller_row, 0);
+    m_gc_layout->addWidget(gc_box, controller_row, 1);
+    m_gc_layout->addWidget(gc_button, controller_row, 2);
   }
   m_gc_box->setLayout(m_gc_layout);
 }
 
-static QHBoxLayout* CreateSubItem(QWidget* label, QWidget* widget)
+static int GetRadioButtonIndicatorWidth()
 {
-  QHBoxLayout* hbox = new QHBoxLayout();
-  hbox->addItem(new QSpacerItem(25, 1));
+  const QStyle* style = QApplication::style();
+  QStyleOptionButton opt;
 
-  if (label != nullptr)
-    hbox->addWidget(label);
+  // TODO: why does the macOS style act different? Is it because of the magic with
+  // Cocoa widgets it does behind the scenes?
+  if (style->objectName() == QStringLiteral("macintosh"))
+    return style->subElementRect(QStyle::SE_RadioButtonIndicator, &opt).width();
 
-  if (widget != nullptr)
-    hbox->addWidget(widget);
-
-  return hbox;
+  return style->subElementRect(QStyle::SE_RadioButtonContents, &opt).left();
 }
 
-static QHBoxLayout* CreateSubItem(QWidget* label, QLayoutItem* item)
+static int GetLayoutHorizontalSpacing(const QGridLayout* layout)
 {
-  QHBoxLayout* hbox = new QHBoxLayout();
-  hbox->addItem(new QSpacerItem(25, 1));
+  // TODO: shouldn't layout->horizontalSpacing() do all this? Why does it return -1?
+  int hspacing = layout->horizontalSpacing();
+  if (hspacing >= 0)
+    return hspacing;
 
-  if (label != nullptr)
-    hbox->addWidget(label);
+  // According to docs, this is the fallback if horizontalSpacing() isn't set.
+  auto style = layout->parentWidget()->style();
+  hspacing = style->pixelMetric(QStyle::PM_LayoutHorizontalSpacing);
+  if (hspacing >= 0)
+    return hspacing;
 
-  if (item != nullptr)
-    hbox->addItem(item);
+  // Docs claim this is deprecated, but on macOS with Qt 5.8 this is the only one that actually
+  // works.
+  float pixel_ratio = QGuiApplication::primaryScreen()->devicePixelRatio();
+  hspacing = pixel_ratio * style->pixelMetric(QStyle::PM_DefaultLayoutSpacing);
+  if (hspacing >= 0)
+    return hspacing;
 
-  return hbox;
+  // Ripped from qtbase/src/widgets/styles/qcommonstyle.cpp
+  return pixel_ratio * 6;
 }
 
 void ControllersWindow::CreateWiimoteLayout()
 {
-  m_wiimote_box = new QGroupBox();
-  m_wiimote_layout = new QFormLayout();
-  m_wiimote_passthrough = new QRadioButton(tr("Use Bluetooth Passthrough"));
+  m_wiimote_layout = new QGridLayout();
+  m_wiimote_box = new QGroupBox(tr("Wii Remotes"));
+  m_wiimote_box->setLayout(m_wiimote_layout);
+
+  m_wiimote_passthrough = new QRadioButton(tr("Passthrough a Bluetooth adapter"));
   m_wiimote_sync = new QPushButton(tr("Sync"));
   m_wiimote_reset = new QPushButton(tr("Reset"));
   m_wiimote_refresh = new QPushButton(tr("Refresh"));
   m_wiimote_pt_labels[0] = new QLabel(tr("Sync real Wii Remotes and pair them"));
   m_wiimote_pt_labels[1] = new QLabel(tr("Reset all saved Wii Remote pairings"));
-  m_wiimote_emu = new QRadioButton(tr("Emulate the Wii Bluetooth Adapter"));
+  m_wiimote_emu = new QRadioButton(tr("Emulate the Wii's Bluetooth adapter"));
   m_wiimote_continuous_scanning = new QCheckBox(tr("Continuous Scanning"));
   m_wiimote_real_balance_board = new QCheckBox(tr("Real Balance Board"));
   m_wiimote_speaker_data = new QCheckBox(tr("Enable Speaker Data"));
 
-  m_wiimote_layout->setLabelAlignment(Qt::AlignLeft);
-
-  m_wii_label = new QLabel();
-  m_wii_label->setPixmap(QPixmap(m_wii_icon));
-  m_wii_label->setAlignment(Qt::AlignCenter);
-  m_wiimote_layout->addRow(m_wii_label);
+  m_wiimote_layout->setVerticalSpacing(7);
+  m_wiimote_layout->setColumnMinimumWidth(0, GetRadioButtonIndicatorWidth() -
+                                                 GetLayoutHorizontalSpacing(m_wiimote_layout));
+  m_wiimote_layout->setColumnStretch(2, 1);
 
   // Passthrough BT
+  m_wiimote_layout->addWidget(m_wiimote_passthrough, m_wiimote_layout->rowCount(), 0, 1, -1);
 
-  m_wiimote_layout->addRow(m_wiimote_passthrough);
+  int sync_row = m_wiimote_layout->rowCount();
+  m_wiimote_layout->addWidget(m_wiimote_pt_labels[0], sync_row, 1, 1, 2);
+  m_wiimote_layout->addWidget(m_wiimote_sync, sync_row, 3);
 
-  m_wiimote_sync->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-  m_wiimote_reset->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-  m_wiimote_refresh->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-
-  m_wiimote_layout->addRow(CreateSubItem(m_wiimote_pt_labels[0], m_wiimote_sync));
-  m_wiimote_layout->addRow(CreateSubItem(m_wiimote_pt_labels[1], m_wiimote_reset));
+  int reset_row = m_wiimote_layout->rowCount();
+  m_wiimote_layout->addWidget(m_wiimote_pt_labels[1], reset_row, 1, 1, 2);
+  m_wiimote_layout->addWidget(m_wiimote_reset, reset_row, 3);
 
   // Emulated BT
-  m_wiimote_layout->addRow(m_wiimote_emu);
+  m_wiimote_layout->addWidget(m_wiimote_emu, m_wiimote_layout->rowCount(), 0, 1, -1);
 
   for (size_t i = 0; i < m_wiimote_groups.size(); i++)
   {
     auto* wm_label = m_wiimote_labels[i] = new QLabel(tr("Wii Remote %1").arg(i + 1));
     auto* wm_box = m_wiimote_boxes[i] = new QComboBox();
-    auto* wm_button = m_wiimote_buttons[i] = new QPushButton(QIcon(m_configure_icon), QString());
-    auto* wm_group = m_wiimote_groups[i] = new QHBoxLayout();
+    auto* wm_button = m_wiimote_buttons[i] = new QPushButton(tr("Configure"));
 
     for (const auto& item :
          {tr("None"), tr("Emulated Wii Remote"), tr("Real Wii Remote"), tr("Hybrid Wii Remote")})
@@ -192,23 +198,18 @@ void ControllersWindow::CreateWiimoteLayout()
       wm_box->addItem(item);
     }
 
-    wm_button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    wm_box->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-
-    wm_group->addItem(new QSpacerItem(25, 1));
-    wm_group->addWidget(wm_label);
-    wm_group->addItem(new QSpacerItem(10, 1));
-    wm_group->addWidget(wm_box);
-    wm_group->addWidget(wm_button);
-
-    m_wiimote_layout->addRow(wm_group);
+    int wm_row = m_wiimote_layout->rowCount();
+    m_wiimote_layout->addWidget(wm_label, wm_row, 1);
+    m_wiimote_layout->addWidget(wm_box, wm_row, 2);
+    m_wiimote_layout->addWidget(wm_button, wm_row, 3);
   }
 
-  m_wiimote_layout->addRow(CreateSubItem(m_wiimote_continuous_scanning, m_wiimote_refresh));
-  m_wiimote_layout->addRow(CreateSubItem(nullptr, m_wiimote_real_balance_board));
-  m_wiimote_layout->addRow(CreateSubItem(m_wiimote_speaker_data, new QSpacerItem(1, 35)));
+  int continuous_scanning_row = m_wiimote_layout->rowCount();
+  m_wiimote_layout->addWidget(m_wiimote_continuous_scanning, continuous_scanning_row, 1, 1, 2);
+  m_wiimote_layout->addWidget(m_wiimote_refresh, continuous_scanning_row, 3);
 
-  m_wiimote_box->setLayout(m_wiimote_layout);
+  m_wiimote_layout->addWidget(m_wiimote_real_balance_board, m_wiimote_layout->rowCount(), 1, 1, -1);
+  m_wiimote_layout->addWidget(m_wiimote_speaker_data, m_wiimote_layout->rowCount(), 1, 1, -1);
 }
 
 void ControllersWindow::CreateAdvancedLayout()
@@ -357,7 +358,7 @@ void ControllersWindow::OnBluetoothPassthroughSyncPressed()
   {
     QMessageBox error(this);
     error.setIcon(QMessageBox::Warning);
-    error.setText(tr("A sync can only be triggered when a Wii game is running"));
+    error.setText(tr("A sync can only be triggered when a Wii game is running."));
     error.exec();
     return;
   }
@@ -378,7 +379,7 @@ void ControllersWindow::OnWiimoteRefreshPressed()
 
 void ControllersWindow::OnEmulationStateChanged(bool running)
 {
-  if (!Settings().IsWiiGameRunning() || NetPlay::IsNetPlayRunning())
+  if (!SConfig::GetInstance().bWii || NetPlay::IsNetPlayRunning())
   {
     m_wiimote_sync->setEnabled(!running);
     m_wiimote_reset->setEnabled(!running);
@@ -390,7 +391,7 @@ void ControllersWindow::OnEmulationStateChanged(bool running)
   m_wiimote_emu->setEnabled(!running);
   m_wiimote_passthrough->setEnabled(!running);
 
-  if (!Settings().IsWiiGameRunning())
+  if (!SConfig::GetInstance().bWii)
   {
     m_wiimote_real_balance_board->setEnabled(!running);
     m_wiimote_continuous_scanning->setEnabled(!running);
@@ -407,20 +408,36 @@ void ControllersWindow::OnGCPadConfigure()
       break;
   }
 
+  MappingWindow::Type type;
+
   switch (m_gc_controller_boxes[index]->currentIndex())
   {
   case 0:  // None
   case 6:  // GBA
     return;
   case 1:  // Standard Controller
+    type = MappingWindow::Type::MAPPING_GCPAD;
+    break;
   case 2:  // GameCube Adapter for Wii U
+    type = MappingWindow::Type::MAPPING_GCPAD_WIIU;
+    break;
   case 3:  // Steering Wheel
+    type = MappingWindow::Type::MAPPING_GC_STEERINGWHEEL;
+    break;
   case 4:  // Dance Mat
+    type = MappingWindow::Type::MAPPING_GC_DANCEMAT;
+    break;
   case 5:  // DK Bongos
+    type = MappingWindow::Type::MAPPING_GC_BONGOS;
+    break;
   case 7:  // Keyboard
-    UnimplementedButton();
+    type = MappingWindow::Type::MAPPING_GC_KEYBOARD;
+    break;
+  default:
     return;
   }
+  m_gc_mappings[index]->ChangeMappingType(type);
+  m_gc_mappings[index]->exec();
 }
 
 void ControllersWindow::OnWiimoteConfigure()
@@ -432,16 +449,23 @@ void ControllersWindow::OnWiimoteConfigure()
       break;
   }
 
+  MappingWindow::Type type;
   switch (m_wiimote_boxes[index]->currentIndex())
   {
   case 0:  // None
   case 2:  // Real Wii Remote
     return;
   case 1:  // Emulated Wii Remote
+    type = MappingWindow::Type::MAPPING_WIIMOTE_EMU;
+    break;
   case 3:  // Hybrid Wii Remote
-    UnimplementedButton();
+    type = MappingWindow::Type::MAPPING_WIIMOTE_HYBRID;
+    break;
+  default:
     return;
   }
+  m_wiimote_mappings[index]->ChangeMappingType(type);
+  m_wiimote_mappings[index]->exec();
 }
 
 void ControllersWindow::UnimplementedButton()
@@ -457,31 +481,30 @@ void ControllersWindow::LoadSettings()
 {
   for (size_t i = 0; i < m_wiimote_groups.size(); i++)
   {
-    m_gc_controller_boxes[i]->setCurrentIndex(ToGCMenuIndex(Settings().GetSIDevice(i)));
+    m_gc_controller_boxes[i]->setCurrentIndex(ToGCMenuIndex(SConfig::GetInstance().m_SIDevice[i]));
     m_wiimote_boxes[i]->setCurrentIndex(ToWiimoteMenuIndex(g_wiimote_sources[i]));
   }
   m_wiimote_real_balance_board->setChecked(g_wiimote_sources[WIIMOTE_BALANCE_BOARD] ==
                                            WIIMOTE_SRC_REAL);
-  m_wiimote_speaker_data->setChecked(Settings().IsWiimoteSpeakerEnabled());
-  m_wiimote_continuous_scanning->setChecked(Settings().IsContinuousScanningEnabled());
+  m_wiimote_speaker_data->setChecked(SConfig::GetInstance().m_WiimoteEnableSpeaker);
+  m_wiimote_continuous_scanning->setChecked(SConfig::GetInstance().m_WiimoteContinuousScanning);
 
-  m_advanced_bg_input->setChecked(Settings().IsBackgroundInputEnabled());
+  m_advanced_bg_input->setChecked(SConfig::GetInstance().m_BackgroundInput);
 
-  if (Settings().IsBluetoothPassthroughEnabled())
+  if (SConfig::GetInstance().m_bt_passthrough_enabled)
     m_wiimote_passthrough->setChecked(true);
   else
     m_wiimote_emu->setChecked(true);
 
-  OnWiimoteModeChanged(Settings().IsBluetoothPassthroughEnabled());
+  OnWiimoteModeChanged(SConfig::GetInstance().m_bt_passthrough_enabled);
 }
 
 void ControllersWindow::SaveSettings()
 {
-  Settings().SetWiimoteSpeakerEnabled(m_wiimote_speaker_data->isChecked());
-  Settings().SetContinuousScanningEnabled(m_wiimote_continuous_scanning->isChecked());
-
-  Settings().SetBluetoothPassthroughEnabled(m_wiimote_passthrough->isChecked());
-  Settings().SetBackgroundInputEnabled(m_advanced_bg_input->isChecked());
+  SConfig::GetInstance().m_WiimoteEnableSpeaker = m_wiimote_speaker_data->isChecked();
+  SConfig::GetInstance().m_WiimoteContinuousScanning = m_wiimote_continuous_scanning->isChecked();
+  SConfig::GetInstance().m_bt_passthrough_enabled = m_wiimote_passthrough->isChecked();
+  SConfig::GetInstance().m_BackgroundInput = m_advanced_bg_input->isChecked();
 
   WiimoteReal::ChangeWiimoteSource(WIIMOTE_BALANCE_BOARD,
                                    m_wiimote_real_balance_board->isChecked() ? WIIMOTE_SRC_REAL :
@@ -499,8 +522,8 @@ void ControllersWindow::SaveSettings()
   for (size_t i = 0; i < m_gc_groups.size(); i++)
   {
     const int index = m_gc_controller_boxes[i]->currentIndex();
-    Settings().SetSIDevice(i, FromGCMenuIndex(index));
+    SConfig::GetInstance().m_SIDevice[i] = FromGCMenuIndex(index);
     m_gc_buttons[i]->setEnabled(index != 0 && index != 6);
   }
-  Settings().Save();
+  SConfig::GetInstance().SaveSettings();
 }

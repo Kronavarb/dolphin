@@ -30,6 +30,7 @@ alignas(16) static float g_fProjectionMatrix[16];
 
 // track changes
 static bool bTexMatricesChanged[2], bPosNormalMatrixChanged, bProjectionChanged, bViewportChanged;
+static bool bTexMtxInfoChanged, bLightingConfigChanged;
 static BitSet32 nMaterialsChanged;
 static int nTransformMatricesChanged[2];      // min,max
 static int nNormalMatricesChanged[2];         // min,max
@@ -56,8 +57,8 @@ struct ProjectionHack
 namespace
 {
 // Control Variables
-static ProjectionHack g_ProjHack1;
-static ProjectionHack g_ProjHack2;
+static ProjectionHack g_proj_hack_near;
+static ProjectionHack g_proj_hack_far;
 }  // Namespace
 
 static float PHackValue(std::string sValue)
@@ -92,31 +93,39 @@ static float PHackValue(std::string sValue)
   return f;
 }
 
-void UpdateProjectionHack(int iPhackvalue[], std::string sPhackvalue[])
+void UpdateProjectionHack(const ProjectionHackConfig& config)
 {
-  float fhackvalue1 = 0, fhackvalue2 = 0;
-  float fhacksign1 = 1.0, fhacksign2 = 1.0;
-  const char* sTemp[2];
+  float near_value = 0, far_value = 0;
+  float near_sign = 1.0, far_sign = 1.0;
 
-  if (iPhackvalue[0] == 1)
+  if (config.m_enable)
   {
+    const char* near_sign_str = "";
+    const char* far_sign_str = "";
+
     NOTICE_LOG(VIDEO, "\t\t--- Orthographic Projection Hack ON ---");
 
-    fhacksign1 *= (iPhackvalue[1] == 1) ? -1.0f : fhacksign1;
-    sTemp[0] = (iPhackvalue[1] == 1) ? " * (-1)" : "";
-    fhacksign2 *= (iPhackvalue[2] == 1) ? -1.0f : fhacksign2;
-    sTemp[1] = (iPhackvalue[2] == 1) ? " * (-1)" : "";
+    if (config.m_sznear)
+    {
+      near_sign *= -1.0f;
+      near_sign_str = " * (-1)";
+    }
+    if (config.m_szfar)
+    {
+      far_sign *= -1.0f;
+      far_sign_str = " * (-1)";
+    }
 
-    fhackvalue1 = PHackValue(sPhackvalue[0]);
-    NOTICE_LOG(VIDEO, "- zNear Correction = (%f + zNear)%s", fhackvalue1, sTemp[0]);
+    near_value = PHackValue(config.m_znear);
+    NOTICE_LOG(VIDEO, "- zNear Correction = (%f + zNear)%s", near_value, near_sign_str);
 
-    fhackvalue2 = PHackValue(sPhackvalue[1]);
-    NOTICE_LOG(VIDEO, "- zFar Correction =  (%f + zFar)%s", fhackvalue2, sTemp[1]);
+    far_value = PHackValue(config.m_zfar);
+    NOTICE_LOG(VIDEO, "- zFar Correction =  (%f + zFar)%s", far_value, far_sign_str);
   }
 
   // Set the projections hacks
-  g_ProjHack1 = ProjectionHack(fhacksign1, fhackvalue1);
-  g_ProjHack2 = ProjectionHack(fhacksign2, fhackvalue2);
+  g_proj_hack_near = ProjectionHack(near_sign, near_value);
+  g_proj_hack_far = ProjectionHack(far_sign, far_value);
 }
 
 // Viewport correction:
@@ -185,8 +194,10 @@ void VertexShaderManager::Init()
   bPosNormalMatrixChanged = false;
   bProjectionChanged = true;
   bViewportChanged = false;
+  bTexMtxInfoChanged = false;
+  bLightingConfigChanged = false;
 
-  xfmem = {};
+  std::memset(&xfmem, 0, sizeof(xfmem));
   constants = {};
   ResetView();
 
@@ -216,7 +227,7 @@ void VertexShaderManager::SetConstants()
   {
     int startn = nTransformMatricesChanged[0] / 4;
     int endn = (nTransformMatricesChanged[1] + 3) / 4;
-    memcpy(constants.transformmatrices[startn], &xfmem.posMatrices[startn * 4],
+    memcpy(constants.transformmatrices[startn].data(), &xfmem.posMatrices[startn * 4],
            (endn - startn) * sizeof(float4));
     dirty = true;
     nTransformMatricesChanged[0] = nTransformMatricesChanged[1] = -1;
@@ -228,7 +239,7 @@ void VertexShaderManager::SetConstants()
     int endn = (nNormalMatricesChanged[1] + 2) / 3;
     for (int i = startn; i < endn; i++)
     {
-      memcpy(constants.normalmatrices[i], &xfmem.normalMatrices[3 * i], 12);
+      memcpy(constants.normalmatrices[i].data(), &xfmem.normalMatrices[3 * i], 12);
     }
     dirty = true;
     nNormalMatricesChanged[0] = nNormalMatricesChanged[1] = -1;
@@ -238,7 +249,7 @@ void VertexShaderManager::SetConstants()
   {
     int startn = nPostTransformMatricesChanged[0] / 4;
     int endn = (nPostTransformMatricesChanged[1] + 3) / 4;
-    memcpy(constants.posttransformmatrices[startn], &xfmem.postMatrices[startn * 4],
+    memcpy(constants.posttransformmatrices[startn].data(), &xfmem.postMatrices[startn * 4],
            (endn - startn) * sizeof(float4));
     dirty = true;
     nPostTransformMatricesChanged[0] = nPostTransformMatricesChanged[1] = -1;
@@ -316,10 +327,10 @@ void VertexShaderManager::SetConstants()
     const float* norm =
         &xfmem.normalMatrices[3 * (g_main_cp_state.matrix_index_a.PosNormalMtxIdx & 31)];
 
-    memcpy(constants.posnormalmatrix, pos, 3 * sizeof(float4));
-    memcpy(constants.posnormalmatrix[3], norm, 3 * sizeof(float));
-    memcpy(constants.posnormalmatrix[4], norm + 3, 3 * sizeof(float));
-    memcpy(constants.posnormalmatrix[5], norm + 6, 3 * sizeof(float));
+    memcpy(constants.posnormalmatrix.data(), pos, 3 * sizeof(float4));
+    memcpy(constants.posnormalmatrix[3].data(), norm, 3 * sizeof(float));
+    memcpy(constants.posnormalmatrix[4].data(), norm + 3, 3 * sizeof(float));
+    memcpy(constants.posnormalmatrix[5].data(), norm + 6, 3 * sizeof(float));
     dirty = true;
   }
 
@@ -334,7 +345,7 @@ void VertexShaderManager::SetConstants()
 
     for (size_t i = 0; i < ArraySize(pos_matrix_ptrs); ++i)
     {
-      memcpy(constants.texmatrices[3 * i], pos_matrix_ptrs[i], 3 * sizeof(float4));
+      memcpy(constants.texmatrices[3 * i].data(), pos_matrix_ptrs[i], 3 * sizeof(float4));
     }
     dirty = true;
   }
@@ -350,7 +361,7 @@ void VertexShaderManager::SetConstants()
 
     for (size_t i = 0; i < ArraySize(pos_matrix_ptrs); ++i)
     {
-      memcpy(constants.texmatrices[3 * i + 12], pos_matrix_ptrs[i], 3 * sizeof(float4));
+      memcpy(constants.texmatrices[3 * i + 12].data(), pos_matrix_ptrs[i], 3 * sizeof(float4));
     }
     dirty = true;
   }
@@ -365,8 +376,7 @@ void VertexShaderManager::SetConstants()
     // NOTE: If we ever emulate antialiasing, the sample locations set by
     // BP registers 0x01-0x04 need to be considered here.
     const float pixel_center_correction = 7.0f / 12.0f - 0.5f;
-    const bool bUseVertexRounding =
-        g_ActiveConfig.bVertexRounding && g_ActiveConfig.iEFBScale != SCALE_1X;
+    const bool bUseVertexRounding = g_ActiveConfig.bVertexRounding && g_ActiveConfig.iEFBScale != 1;
     const float viewport_width = bUseVertexRounding ?
                                      (2.f * xfmem.viewport.wd) :
                                      g_renderer->EFBToScaledXf(2.f * xfmem.viewport.wd);
@@ -485,10 +495,10 @@ void VertexShaderManager::SetConstants()
 
       g_fProjectionMatrix[8] = 0.0f;
       g_fProjectionMatrix[9] = 0.0f;
-      g_fProjectionMatrix[10] = (g_ProjHack1.value + rawProjection[4]) *
-                                ((g_ProjHack1.sign == 0) ? 1.0f : g_ProjHack1.sign);
-      g_fProjectionMatrix[11] = (g_ProjHack2.value + rawProjection[5]) *
-                                ((g_ProjHack2.sign == 0) ? 1.0f : g_ProjHack2.sign);
+      g_fProjectionMatrix[10] = (g_proj_hack_near.value + rawProjection[4]) *
+                                ((g_proj_hack_near.sign == 0) ? 1.0f : g_proj_hack_near.sign);
+      g_fProjectionMatrix[11] = (g_proj_hack_far.value + rawProjection[5]) *
+                                ((g_proj_hack_far.sign == 0) ? 1.0f : g_proj_hack_far.sign);
 
       g_fProjectionMatrix[12] = 0.0f;
       g_fProjectionMatrix[13] = 0.0f;
@@ -539,7 +549,7 @@ void VertexShaderManager::SetConstants()
       Matrix44::Set(mtxB, g_fProjectionMatrix);
       Matrix44::Multiply(mtxB, viewMtx, mtxA);               // mtxA = projection x view
       Matrix44::Multiply(s_viewportCorrection, mtxA, mtxB);  // mtxB = viewportCorrection x mtxA
-      memcpy(constants.projection, mtxB.data, 4 * sizeof(float4));
+      memcpy(constants.projection.data(), mtxB.data, 4 * sizeof(float4));
     }
     else
     {
@@ -548,8 +558,34 @@ void VertexShaderManager::SetConstants()
 
       Matrix44 correctedMtx;
       Matrix44::Multiply(s_viewportCorrection, projMtx, correctedMtx);
-      memcpy(constants.projection, correctedMtx.data, 4 * sizeof(float4));
+      memcpy(constants.projection.data(), correctedMtx.data, 4 * sizeof(float4));
     }
+
+    dirty = true;
+  }
+
+  if (bTexMtxInfoChanged)
+  {
+    bTexMtxInfoChanged = false;
+    constants.xfmem_dualTexInfo = xfmem.dualTexTrans.enabled;
+    for (size_t i = 0; i < ArraySize(xfmem.texMtxInfo); i++)
+      constants.xfmem_pack1[i][0] = xfmem.texMtxInfo[i].hex;
+    for (size_t i = 0; i < ArraySize(xfmem.postMtxInfo); i++)
+      constants.xfmem_pack1[i][1] = xfmem.postMtxInfo[i].hex;
+
+    dirty = true;
+  }
+
+  if (bLightingConfigChanged)
+  {
+    bLightingConfigChanged = false;
+
+    for (size_t i = 0; i < 2; i++)
+    {
+      constants.xfmem_pack1[i][2] = xfmem.color[i].hex;
+      constants.xfmem_pack1[i][3] = xfmem.alpha[i].hex;
+    }
+    constants.xfmem_numColorChans = xfmem.numChan.numColorChans;
 
     dirty = true;
   }
@@ -750,6 +786,27 @@ void VertexShaderManager::ResetView()
   bProjectionChanged = true;
 }
 
+void VertexShaderManager::SetVertexFormat(u32 components)
+{
+  if (components != constants.components)
+  {
+    constants.components = components;
+    dirty = true;
+  }
+}
+
+void VertexShaderManager::SetTexMatrixInfoChanged(int index)
+{
+  // TODO: Should we track this with more precision, like which indices changed?
+  // The whole vertex constants are probably going to be uploaded regardless.
+  bTexMtxInfoChanged = true;
+}
+
+void VertexShaderManager::SetLightingConfigChanged()
+{
+  bLightingConfigChanged = true;
+}
+
 void VertexShaderManager::TransformToClipSpace(const float* data, float* out, u32 MtxIdx)
 {
   const float* world_matrix = &xfmem.posMatrices[(MtxIdx & 0x3f) * 4];
@@ -792,6 +849,8 @@ void VertexShaderManager::DoState(PointerWrap& p)
   p.Do(bPosNormalMatrixChanged);
   p.Do(bProjectionChanged);
   p.Do(bViewportChanged);
+  p.Do(bTexMtxInfoChanged);
+  p.Do(bLightingConfigChanged);
 
   p.Do(constants);
 

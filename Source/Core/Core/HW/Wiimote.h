@@ -58,6 +58,7 @@ enum class InitializeMode
 
 void Shutdown();
 void Initialize(InitializeMode init_mode);
+void Connect(unsigned int index, bool connect);
 void ResetAllWiimotes();
 void LoadConfig();
 void Resume();
@@ -65,7 +66,6 @@ void Pause();
 
 unsigned int GetAttached();
 void DoState(PointerWrap& p);
-void EmuStateChange(EMUSTATE_CHANGE newState);
 InputConfig* GetConfig();
 ControllerEmu::ControlGroup* GetWiimoteGroup(int number, WiimoteEmu::WiimoteGroup group);
 ControllerEmu::ControlGroup* GetNunchukGroup(int number, WiimoteEmu::NunchukGroup group);
@@ -76,7 +76,9 @@ ControllerEmu::ControlGroup* GetTurntableGroup(int number, WiimoteEmu::Turntable
 
 void ControlChannel(int number, u16 channel_id, const void* data, u32 size);
 void InterruptChannel(int number, u16 channel_id, const void* data, u32 size);
+bool ButtonPressed(int number);
 void Update(int number, bool connected);
+bool NetPlay_GetButtonPress(int wiimote, bool pressed);
 }
 
 namespace WiimoteReal

@@ -17,15 +17,21 @@ set(SRCS
   NetPlayServer.cpp
   PatchEngine.cpp
   State.cpp
+  TitleDatabase.cpp
   WiiRoot.cpp
+  WiiUtils.cpp
   Boot/Boot_BS2Emu.cpp
   Boot/Boot.cpp
-  Boot/Boot_DOL.cpp
-  Boot/Boot_ELF.cpp
   Boot/Boot_WiiWAD.cpp
+  Boot/DolReader.cpp
   Boot/ElfReader.cpp
+  Config/GraphicsSettings.cpp
+  Config/MainSettings.cpp
+  Config/NetplaySettings.cpp
+  Config/SYSCONFSettings.cpp
   ConfigLoaders/BaseConfigLoader.cpp
   ConfigLoaders/GameConfigLoader.cpp
+  ConfigLoaders/IsSettingSaveable.cpp
   ConfigLoaders/MovieConfigLoader.cpp
   ConfigLoaders/NetPlayConfigLoader.cpp
   Debugger/Debugger_SymbolMap.cpp
@@ -71,6 +77,7 @@ set(SRCS
   HLE/HLE.cpp
   HLE/HLE_Misc.cpp
   HLE/HLE_OS.cpp
+  HLE/HLE_VarArgs.cpp
   HW/AudioInterface.cpp
   HW/CPU.cpp
   HW/DSP.cpp
@@ -89,7 +96,6 @@ set(SRCS
   HW/DSPLLE/DSPSymbols.cpp
   HW/DSPLLE/DSPLLEGlobals.cpp
   HW/DSPLLE/DSPLLE.cpp
-  HW/DSPLLE/DSPLLETools.cpp
   HW/DVD/DVDInterface.cpp
   HW/DVD/DVDMath.cpp
   HW/DVD/DVDThread.cpp
@@ -170,7 +176,7 @@ set(SRCS
   IOS/Network/KD/NetKDRequest.cpp
   IOS/Network/KD/NetKDTime.cpp
   IOS/Network/KD/NWC24Config.cpp
-  IOS/Network/NCD/Config.cpp
+  IOS/Network/NCD/WiiNetConfig.cpp
   IOS/Network/NCD/Manage.cpp
   IOS/Network/WD/Command.cpp
   IOS/SDIO/SDIOSlot0.cpp
@@ -180,6 +186,7 @@ set(SRCS
   IOS/USB/OH0/OH0.cpp
   IOS/USB/OH0/OH0Device.cpp
   IOS/USB/USB_HID/HIDv4.cpp
+  IOS/USB/USB_HID/HIDv5.cpp
   IOS/USB/USB_VEN/VEN.cpp
   IOS/USB/USBV0.cpp
   IOS/USB/USBV4.cpp
@@ -219,22 +226,10 @@ set(SRCS
   PowerPC/JitCommon/JitAsmCommon.cpp
   PowerPC/JitCommon/JitBase.cpp
   PowerPC/JitCommon/JitCache.cpp
-  PowerPC/JitILCommon/IR.cpp
-  PowerPC/JitILCommon/JitILBase_Branch.cpp
-  PowerPC/JitILCommon/JitILBase_LoadStore.cpp
-  PowerPC/JitILCommon/JitILBase_SystemRegisters.cpp
-  PowerPC/JitILCommon/JitILBase_LoadStoreFloating.cpp
-  PowerPC/JitILCommon/JitILBase_LoadStorePaired.cpp
-  PowerPC/JitILCommon/JitILBase_Paired.cpp
-  PowerPC/JitILCommon/JitILBase_FloatingPoint.cpp
-  PowerPC/JitILCommon/JitILBase_Integer.cpp
 )
 
 if(_M_X86)
   set(SRCS ${SRCS}
-    PowerPC/Jit64IL/IR_X86.cpp
-    PowerPC/Jit64IL/JitIL.cpp
-    PowerPC/Jit64IL/JitIL_Tables.cpp
     PowerPC/Jit64/FPURegCache.cpp
     PowerPC/Jit64/GPRRegCache.cpp
     PowerPC/Jit64/Jit64_Tables.cpp
@@ -281,10 +276,12 @@ set(LIBS
   audiocommon
   bdisasm
   common
+  cubeb
   discio
   enet
   inputcommon
   ${LZO}
+  pugixml
   sfml-network
   sfml-system
   videonull
@@ -312,7 +309,6 @@ if(WIN32)
   set(SRCS ${SRCS} HW/EXI/BBA-TAP/TAP_Win32.cpp HW/WiimoteReal/IOWin.cpp)
   list(APPEND LIBS
     videod3d
-    videod3d12
     setupapi.lib
     iphlpapi.lib
   )
@@ -348,14 +344,6 @@ if(TARGET Hidapi::Hidapi)
   set(SRCS ${SRCS} HW/WiimoteReal/IOhidapi.cpp)
   list(APPEND LIBS Hidapi::Hidapi)
   add_definitions(-DHAVE_HIDAPI=1)
-endif()
-
-if(PORTAUDIO_FOUND)
-  set(LIBS ${LIBS} ${PORTAUDIO_LIBRARIES})
-endif()
-
-if(OPROFILE_FOUND)
-  set(LIBS ${LIBS} ${OPROFILE_LIBRARIES})
 endif()
 
 if(GDBSTUB)

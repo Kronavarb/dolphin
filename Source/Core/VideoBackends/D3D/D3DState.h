@@ -4,13 +4,15 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <stack>
 #include <unordered_map>
 
 #include "Common/BitField.h"
 #include "Common/CommonTypes.h"
 #include "VideoBackends/D3D/D3DBase.h"
-#include "VideoCommon/BPMemory.h"
+#include "VideoCommon/RenderState.h"
 
 struct ID3D11BlendState;
 struct ID3D11DepthStencilState;
@@ -21,18 +23,6 @@ namespace DX11
 union RasterizerState
 {
   BitField<0, 2, D3D11_CULL_MODE> cull_mode;
-
-  u32 packed;
-};
-
-union BlendState
-{
-  BitField<0, 1, u32> blend_enable;
-  BitField<1, 3, D3D11_BLEND_OP> blend_op;
-  BitField<4, 4, u32> write_mask;
-  BitField<8, 5, D3D11_BLEND> src_blend;
-  BitField<13, 5, D3D11_BLEND> dst_blend;
-  BitField<18, 1, u32> use_dst_alpha;
 
   u32 packed;
 };
@@ -57,7 +47,7 @@ public:
   // Get existing or create new render state.
   // Returned objects is owned by the cache and does not need to be released.
   ID3D11SamplerState* Get(SamplerState state);
-  ID3D11BlendState* Get(BlendState state);
+  ID3D11BlendState* Get(BlendingState state);
   ID3D11RasterizerState* Get(RasterizerState state);
   ID3D11DepthStencilState* Get(ZMode state);
 
@@ -105,7 +95,7 @@ public:
   void PopDepthState();
   void PopRasterizerState();
 
-  void SetTexture(u32 index, ID3D11ShaderResourceView* texture)
+  void SetTexture(size_t index, ID3D11ShaderResourceView* texture)
   {
     if (m_current.textures[index] != texture)
       m_dirtyFlags |= DirtyFlag_Texture0 << index;
@@ -113,7 +103,7 @@ public:
     m_pending.textures[index] = texture;
   }
 
-  void SetSampler(u32 index, ID3D11SamplerState* sampler)
+  void SetSampler(size_t index, ID3D11SamplerState* sampler)
   {
     if (m_current.samplers[index] != sampler)
       m_dirtyFlags |= DirtyFlag_Sampler0 << index;
@@ -268,9 +258,9 @@ private:
 
   struct Resources
   {
-    ID3D11ShaderResourceView* textures[8];
-    ID3D11SamplerState* samplers[8];
-    ID3D11Buffer* pixelConstants[2];
+    std::array<ID3D11ShaderResourceView*, 8> textures;
+    std::array<ID3D11SamplerState*, 8> samplers;
+    std::array<ID3D11Buffer*, 2> pixelConstants;
     ID3D11Buffer* vertexConstants;
     ID3D11Buffer* geometryConstants;
     ID3D11Buffer* vertexBuffer;

@@ -6,6 +6,7 @@
 
 #include <array>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -17,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/NandPaths.h"
 #include "Common/StringUtil.h"
+#include "Core/CommonTitles.h"
 #include "Core/ConfigManager.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/EXI/EXI.h"
@@ -30,7 +32,6 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
 #include "DiscIO/Enums.h"
-#include "DiscIO/NANDContentLoader.h"
 
 namespace ExpansionInterface
 {
@@ -156,11 +157,12 @@ CEXIMemoryCard::CEXIMemoryCard(const int index, bool gciFolder) : card_index(ind
 
 void CEXIMemoryCard::SetupGciFolder(u16 sizeMb)
 {
-  DiscIO::Region region = SConfig::GetInstance().m_region;
+  const DiscIO::Region region = SConfig::ToGameCubeRegion(SConfig::GetInstance().m_region);
 
   const std::string& game_id = SConfig::GetInstance().GetGameID();
   u32 CurrentGameId = 0;
-  if (game_id.length() >= 4 && game_id != "00000000" && game_id != TITLEID_SYSMENU_STRING)
+  if (game_id.length() >= 4 && game_id != "00000000" &&
+      SConfig::GetInstance().GetTitleID() != Titles::SYSTEM_MENU)
     CurrentGameId = BE32((u8*)game_id.c_str());
 
   const bool shift_jis = region == DiscIO::Region::NTSC_J;
@@ -174,11 +176,12 @@ void CEXIMemoryCard::SetupGciFolder(u16 sizeMb)
   strDirectoryName = strDirectoryName + SConfig::GetDirectoryForRegion(region) + DIR_SEP +
                      StringFromFormat("Card %c", 'A' + card_index);
 
-  if (!File::Exists(strDirectoryName))  // first use of memcard folder, migrate automatically
+  const File::FileInfo file_info(strDirectoryName);
+  if (!file_info.Exists())  // first use of memcard folder, migrate automatically
   {
     MigrateFromMemcardFile(strDirectoryName + DIR_SEP, card_index);
   }
-  else if (!File::IsDirectory(strDirectoryName))
+  else if (!file_info.IsDirectory())
   {
     if (File::Rename(strDirectoryName, strDirectoryName + ".original"))
     {
@@ -196,7 +199,7 @@ void CEXIMemoryCard::SetupGciFolder(u16 sizeMb)
   }
 
   memorycard = std::make_unique<GCMemcardDirectory>(strDirectoryName + DIR_SEP, card_index, sizeMb,
-                                                    shift_jis, region, CurrentGameId);
+                                                    shift_jis, CurrentGameId);
 }
 
 void CEXIMemoryCard::SetupRawMemcard(u16 sizeMb)

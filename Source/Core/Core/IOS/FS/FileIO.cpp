@@ -2,6 +2,8 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/IOS/FS/FileIO.h"
+
 #include <cinttypes>
 #include <cstdio>
 #include <map>
@@ -11,10 +13,11 @@
 #include "Common/Assert.h"
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
+#include "Common/File.h"
 #include "Common/FileUtil.h"
 #include "Common/NandPaths.h"
+#include "Core/CommonTitles.h"
 #include "Core/HW/Memmap.h"
-#include "Core/IOS/FS/FileIO.h"
 #include "Core/IOS/IOS.h"
 
 namespace IOS
@@ -38,7 +41,7 @@ void CreateVirtualFATFilesystem()
 {
   const int cdbSize = 0x01400000;
   const std::string cdbPath =
-      Common::GetTitleDataPath(TITLEID_SYSMENU, Common::FROM_SESSION_ROOT) + "cdb.vff";
+      Common::GetTitleDataPath(Titles::SYSTEM_MENU, Common::FROM_SESSION_ROOT) + "cdb.vff";
   if ((int)File::GetSize(cdbPath) < cdbSize)
   {
     // cdb.vff is a virtual Fat filesystem created on first launch of sysmenu
@@ -99,7 +102,7 @@ ReturnCode FileIO::Open(const OpenRequest& request)
 
   // The file must exist before we can open it
   // It should be created by ISFS_CreateFile, not here
-  if (!File::Exists(m_filepath) || File::IsDirectory(m_filepath))
+  if (!File::IsFile(m_filepath))
   {
     WARN_LOG(IOS_FILEIO, "FileIO: Open (%s) failed - File doesn't exist %s", Modes[m_Mode],
              m_filepath.c_str());

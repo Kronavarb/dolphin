@@ -1,13 +1,24 @@
-find_package(Qt5Widgets REQUIRED)
+find_package(Qt5Widgets)
+find_package(Qt5Gui)
+
+if(NOT Qt5Widgets_FOUND OR NOT Qt5Gui_FOUND)
+  message(FATAL_ERROR "Could not find Qt5, which is required to build the DolphinQt2 frontend. If you don't want to build the Qt frontend, pass -DENABLE_QT2=False to
+CMake.")
+endif()
+
+set_property(TARGET Qt5::Core PROPERTY INTERFACE_COMPILE_FEATURES "")
 message(STATUS "Found Qt version ${Qt5Core_VERSION}")
 
 include_directories(${CMAKE_CURRENT_BINARY_DIR})
+
+include_directories(${Qt5Gui_PRIVATE_INCLUDE_DIRS})
 
 add_definitions(-DQT_USE_QSTRINGBUILDER -DQT_NO_CAST_FROM_ASCII -DQT_NO_CAST_TO_ASCII)
 set(CMAKE_AUTOMOC ON)
 
 set(SRCS
   AboutDialog.cpp
+  HotkeyScheduler.cpp
   Host.cpp
   InDevelopmentWarning.cpp
   Main.cpp
@@ -17,20 +28,64 @@ set(SRCS
   Resources.cpp
   Settings.cpp
   ToolBar.cpp
+  WiiUpdate.cpp
+  WiiUpdate.h
   Config/ControllersWindow.cpp
   Config/FilesystemWidget.cpp
+  Config/Graphics/AdvancedWidget.cpp
+  Config/Graphics/EnhancementsWidget.cpp
+  Config/Graphics/GeneralWidget.cpp
+  Config/Graphics/HacksWidget.cpp
+  Config/Graphics/GraphicsBool.cpp
+  Config/Graphics/GraphicsChoice.cpp
+  Config/Graphics/GraphicsSlider.cpp
+  Config/Graphics/GraphicsWidget.cpp
+  Config/Graphics/GraphicsWindow.cpp
+  Config/Graphics/SoftwareRendererWidget.cpp
   Config/InfoWidget.cpp
-  Config/PathDialog.cpp
+  Config/LoggerWidget.cpp
+  Config/Mapping/GCKeyboardEmu.cpp
+  Config/Mapping/GCPadEmu.cpp
+  Config/Mapping/GCPadWiiU.cpp
+  Config/Mapping/Hotkey3D.cpp
+  Config/Mapping/HotkeyGeneral.cpp
+  Config/Mapping/HotkeyGraphics.cpp
+  Config/Mapping/HotkeyStates.cpp
+  Config/Mapping/HotkeyTAS.cpp
+  Config/Mapping/HotkeyWii.cpp
+  Config/Mapping/IOWindow.cpp
+  Config/Mapping/MappingBool.cpp
+  Config/Mapping/MappingButton.cpp
+  Config/Mapping/MappingCommon.cpp
+  Config/Mapping/MappingNumeric.cpp
+  Config/Mapping/MappingWidget.cpp
+  Config/Mapping/MappingWindow.cpp
+  Config/Mapping/WiimoteEmuExtension.cpp
+  Config/Mapping/WiimoteEmuGeneral.cpp
+  Config/Mapping/WiimoteEmuMotionControl.cpp
   Config/PropertiesDialog.cpp
   Config/SettingsWindow.cpp
+  GameList/GameFileCache.cpp
   GameList/GameFile.cpp
   GameList/GameList.cpp
   GameList/GameListModel.cpp
   GameList/GameTracker.cpp
+  GameList/GridProxyModel.cpp
   GameList/ListProxyModel.cpp
-  GameList/TableDelegate.cpp
+  QtUtils/BlockUserInputFilter.cpp
+  NetPlay/GameListDialog.cpp
+  NetPlay/MD5Dialog.cpp
+  NetPlay/NetPlayDialog.cpp
+  NetPlay/NetPlaySetupDialog.cpp
+  NetPlay/PadMappingDialog.cpp
+  QtUtils/DoubleClickEventFilter.cpp
+  QtUtils/ElidedButton.cpp
+  QtUtils/ListTabWidget.cpp
+  QtUtils/WindowActivationEventFilter.cpp
+  Settings/AudioPane.cpp
   Settings/GeneralPane.cpp
   Settings/InterfacePane.cpp
+  Settings/PathPane.cpp
 )
 
 list(APPEND LIBS core uicommon)

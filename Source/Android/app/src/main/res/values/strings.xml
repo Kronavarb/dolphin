@@ -56,7 +56,7 @@
     <!-- GameCube buttons (May be shared with other stuff too) -->
     <string name="button_a">A</string>
     <string name="button_b">B</string>
-    <string name="button_start">Start</string>
+    <string name="button_start">START</string>
     <string name="button_x">X</string>
     <string name="button_y">Y</string>
     <string name="button_z">Z</string>
@@ -68,7 +68,7 @@
     <string name="button_two">2</string>
     <string name="button_minus">-</string>
     <string name="button_plus">+</string>
-    <string name="button_home">Home</string>
+    <string name="button_home">HOME</string>
     <string name="ir_hide">Hide</string>
     <string name="tilt_modifier">Modifier</string>
     <string name="shake_x">X</string>
@@ -179,6 +179,8 @@
     <string name="fast_depth_calculation_descrip">Uses a less accurate algorithm to calculate depth values.</string>
     <string name="aspect_ratio">Aspect Ratio</string>
     <string name="aspect_ratio_descrip">Select what aspect ratio to use when rendering</string>
+    <string name="ubershader_mode">Ubershader Mode</string>
+    <string name="ubershader_mode_descrip">Specifies when to use Ubershaders. Disabled - Never, Hybrid - Use ubershaders while compiling specialized shaders. Exclusive - Use only ubershaders, largest performance impact.</string>
 
     <!-- Miscellaneous -->
     <string name="yes">Yes</string>
@@ -228,7 +230,7 @@
     <string name="emulation_control_scale">Adjust Scale</string>
     <string name="emulation_choose_controller">Choose Controller</string>
     <string name="emulation_controller_changed">You may have to reload the game after changing extensions.</string>
-    
+
     <!-- GC Adapter Menu-->
     <string name="gc_adapter_rumble">Enable Vibration</string>
     <string name="gc_adapter_rumble_description">Enable the vibration function for this GameCube controller.</string>

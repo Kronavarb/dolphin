@@ -2,10 +2,13 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/HW/DVD/DVDThread.h"
+
 #include <cinttypes>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -24,7 +27,6 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/DVD/DVDInterface.h"
-#include "Core/HW/DVD/DVDThread.h"
 #include "Core/HW/DVD/FileMonitor.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SystemTimers.h"
@@ -85,7 +87,7 @@ static Common::FifoQueue<ReadRequest, false> s_request_queue;
 static Common::FifoQueue<ReadResult, false> s_result_queue;
 static std::map<u64, ReadResult> s_result_map;
 
-static std::unique_ptr<DiscIO::IVolume> s_disc;
+static std::unique_ptr<DiscIO::Volume> s_disc;
 
 void Start()
 {
@@ -179,7 +181,7 @@ void DoState(PointerWrap& p)
   // was made. Handling that properly may be more effort than it's worth.
 }
 
-void SetDisc(std::unique_ptr<DiscIO::IVolume> disc)
+void SetDisc(std::unique_ptr<DiscIO::Volume> disc)
 {
   WaitUntilIdle();
   s_disc = std::move(disc);
@@ -209,30 +211,19 @@ IOS::ES::TicketReader GetTicket(const DiscIO::Partition& partition)
   return s_disc->GetTicket(partition);
 }
 
-bool UpdateRunningGameMetadata(const DiscIO::Partition& partition, u64 title_id)
+bool UpdateRunningGameMetadata(const DiscIO::Partition& partition, std::optional<u64> title_id)
 {
   if (!s_disc)
     return false;
 
   WaitUntilIdle();
 
-  u64 volume_title_id;
-  if (!s_disc->GetTitleID(&volume_title_id, partition))
-    return false;
-
-  if (volume_title_id != title_id)
-    return false;
-
-  SConfig::GetInstance().SetRunningGameMetadata(*s_disc, partition);
-  return true;
-}
-
-bool UpdateRunningGameMetadata(const DiscIO::Partition& partition)
-{
-  if (!s_disc)
-    return false;
-
-  DVDThread::WaitUntilIdle();
+  if (title_id)
+  {
+    const std::optional<u64> volume_title_id = s_disc->GetTitleID(partition);
+    if (!volume_title_id || *volume_title_id != *title_id)
+      return false;
+  }
 
   SConfig::GetInstance().SetRunningGameMetadata(*s_disc, partition);
   return true;
@@ -335,7 +326,7 @@ static void FinishRead(u64 id, s64 cycles_late)
             (CoreTiming::GetTicks() - request.time_started_ticks) /
                 (SystemTimers::GetTicksPerSecond() / 1000000));
 
-  if (buffer.empty())
+  if (buffer.size() != request.length)
   {
     PanicAlertT("The disc could not be read (at 0x%" PRIx64 " - 0x%" PRIx64 ").",
                 request.dvd_offset, request.dvd_offset + request.length);

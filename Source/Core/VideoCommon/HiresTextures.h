@@ -9,7 +9,9 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
-#include "VideoCommon/VideoCommon.h"
+#include "VideoCommon/TextureConfig.h"
+
+enum class TextureFormat;
 
 class HiresTexture
 {
@@ -22,23 +24,23 @@ public:
 
   static std::shared_ptr<HiresTexture> Search(const u8* texture, size_t texture_size,
                                               const u8* tlut, size_t tlut_size, u32 width,
-                                              u32 height, int format, bool has_mipmaps);
+                                              u32 height, TextureFormat format, bool has_mipmaps);
 
   static std::string GenBaseName(const u8* texture, size_t texture_size, const u8* tlut,
-                                 size_t tlut_size, u32 width, u32 height, int format,
+                                 size_t tlut_size, u32 width, u32 height, TextureFormat format,
                                  bool has_mipmaps, bool dump = false);
 
   static u32 CalculateMipCount(u32 width, u32 height);
 
   ~HiresTexture();
 
-  HostTextureFormat GetFormat() const;
+  AbstractTextureFormat GetFormat() const;
   struct Level
   {
     Level();
 
     ImageDataPointer data;
-    HostTextureFormat format = HostTextureFormat::RGBA8;
+    AbstractTextureFormat format = AbstractTextureFormat::RGBA8;
     u32 width = 0;
     u32 height = 0;
     u32 row_length = 0;

@@ -15,7 +15,6 @@
 
 #include "Common/Atomic.h"
 #include "Common/CommonTypes.h"
-#include "Common/FileUtil.h"
 #include "Common/GL/GLInterfaceBase.h"
 #include "Common/GL/GLUtil.h"
 #include "Common/Logging/LogManager.h"
@@ -23,10 +22,12 @@
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
 
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/Core.h"
 
 #include "VideoBackends/OGL/BoundingBox.h"
 #include "VideoBackends/OGL/FramebufferManager.h"
+#include "VideoBackends/OGL/OGLTexture.h"
 #include "VideoBackends/OGL/PostProcessing.h"
 #include "VideoBackends/OGL/ProgramShaderCache.h"
 #include "VideoBackends/OGL/RasterFont.h"
@@ -42,6 +43,7 @@
 #include "VideoCommon/PixelEngine.h"
 #include "VideoCommon/PixelShaderManager.h"
 #include "VideoCommon/RenderState.h"
+#include "VideoCommon/ShaderGenCommon.h"
 #include "VideoCommon/VertexShaderManager.h"
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoConfig.h"
@@ -49,7 +51,7 @@
 
 void VideoConfig::UpdateProjectionHack()
 {
-  ::UpdateProjectionHack(g_Config.iPhackvalue, g_Config.sPhackvalue);
+  ::UpdateProjectionHack(g_Config.phack);
 }
 
 namespace OGL
@@ -62,7 +64,7 @@ static std::unique_ptr<RasterFont> s_raster_font;
 
 // 1 for no MSAA. Use s_MSAASamples > 1 to check for MSAA.
 static int s_MSAASamples = 1;
-static int s_last_multisamples = 1;
+static u32 s_last_multisamples = 1;
 static bool s_last_stereo_mode = false;
 static bool s_last_xfb_mode = false;
 
@@ -324,6 +326,29 @@ static void InitDriverInfo()
     version = 100 * major + minor;
   }
   break;
+  case DriverDetails::VENDOR_IMGTEC:
+  {
+    // Example version string:
+    // "OpenGL ES 3.2 build 1.9@4850625"
+    // Ends up as "109.4850625" - "1.9" being the branch, "4850625" being the build's change ID
+    // The change ID only makes sense to compare within a branch
+    driver = DriverDetails::DRIVER_IMGTEC;
+    double gl_version;
+    int major, minor, change;
+    constexpr double change_scale = 10000000;
+    sscanf(g_ogl_config.gl_version, "OpenGL ES %lg build %d.%d@%d", &gl_version, &major, &minor,
+           &change);
+    version = 100 * major + minor;
+    if (change >= change_scale)
+    {
+      ERROR_LOG(VIDEO, "Version changeID overflow - change:%d scale:%f", change, change_scale);
+    }
+    else
+    {
+      version += static_cast<double>(change) / change_scale;
+    }
+  }
+  break;
   // We don't care about these
   default:
     break;
@@ -445,6 +470,12 @@ Renderer::Renderer()
   // Clip distance support is useless without a method to clamp the depth range
   g_Config.backend_info.bSupportsDepthClamp = GLExtensions::Supports("GL_ARB_depth_clamp");
 
+  // Desktop OpenGL supports bitfield manulipation and dynamic sampler indexing if it supports
+  // shader5. OpenGL ES 3.1 supports it implicitly without an extension
+  g_Config.backend_info.bSupportsBitfield = GLExtensions::Supports("GL_ARB_gpu_shader5");
+  g_Config.backend_info.bSupportsDynamicSamplerIndexing =
+      GLExtensions::Supports("GL_ARB_gpu_shader5");
+
   g_ogl_config.bSupportsGLSLCache = GLExtensions::Supports("GL_ARB_get_program_binary");
   g_ogl_config.bSupportsGLPinnedMemory = GLExtensions::Supports("GL_AMD_pinned_memory");
   g_ogl_config.bSupportsGLSync = GLExtensions::Supports("GL_ARB_sync");
@@ -469,6 +500,8 @@ Renderer::Renderer()
   g_Config.backend_info.bSupportsComputeShaders = GLExtensions::Supports("GL_ARB_compute_shader");
   g_Config.backend_info.bSupportsST3CTextures =
       GLExtensions::Supports("GL_EXT_texture_compression_s3tc");
+  g_Config.backend_info.bSupportsBPTCTextures =
+      GLExtensions::Supports("GL_ARB_texture_compression_bptc");
 
   if (GLInterface->GetMode() == GLInterfaceMode::MODE_OPENGLES3)
   {
@@ -513,12 +546,14 @@ Renderer::Renderer()
       g_ogl_config.bSupportsMSAA = true;
       g_ogl_config.bSupportsTextureStorage = true;
       g_ogl_config.bSupports2DTextureStorageMultisample = true;
+      g_Config.backend_info.bSupportsBitfield = true;
+      g_Config.backend_info.bSupportsDynamicSamplerIndexing = g_ogl_config.bSupportsAEP;
       if (g_ActiveConfig.iStereoMode > 0 && g_ActiveConfig.iMultisamples > 1 &&
           !g_ogl_config.bSupports3DTextureStorageMultisample)
       {
         // GLES 3.1 can't support stereo rendering and MSAA
         OSD::AddMessage("MSAA Stereo rendering isn't supported by your GPU.", 10000);
-        g_ActiveConfig.iMultisamples = 1;
+        Config::SetCurrent(Config::GFX_MSAA, UINT32_C(1));
       }
     }
     else
@@ -540,6 +575,8 @@ Renderer::Renderer()
       g_ogl_config.bSupportsTextureStorage = true;
       g_ogl_config.bSupports2DTextureStorageMultisample = true;
       g_ogl_config.bSupports3DTextureStorageMultisample = true;
+      g_Config.backend_info.bSupportsBitfield = true;
+      g_Config.backend_info.bSupportsDynamicSamplerIndexing = true;
     }
   }
   else
@@ -663,6 +700,9 @@ Renderer::Renderer()
   g_Config.VerifyValidity();
   UpdateActiveConfig();
 
+  // Since we modify the config here, we need to update the last host bits, it may have changed.
+  m_last_host_config_bits = ShaderHostConfig::GetCurrent().bits;
+
   OSD::AddMessage(StringFromFormat("Video Info: %s, %s, %s", g_ogl_config.gl_vendor,
                                    g_ogl_config.gl_renderer, g_ogl_config.gl_version),
                   5000);
@@ -695,7 +735,6 @@ Renderer::Renderer()
 
   // Because of the fixed framebuffer size we need to disable the resolution
   // options while running
-  g_Config.bRunning = true;
 
   // The stencil is used for bounding box emulation when SSBOs are not available
   glDisable(GL_STENCIL_TEST);
@@ -763,7 +802,6 @@ void Renderer::Shutdown()
 {
   g_framebuffer_manager.reset();
 
-  g_Config.bRunning = false;
   UpdateActiveConfig();
 
   s_raster_font.reset();
@@ -1197,6 +1235,16 @@ void Renderer::BlitScreen(TargetRectangle src, TargetRectangle dst, GLuint src_t
     post_processor->BlitFromTexture(src, leftRc, src_texture, src_width, src_height, 0);
     post_processor->BlitFromTexture(src, rightRc, src_texture, src_width, src_height, 1);
   }
+  else if (g_ActiveConfig.iStereoMode == STEREO_QUADBUFFER)
+  {
+    glDrawBuffer(GL_BACK_LEFT);
+    post_processor->BlitFromTexture(src, dst, src_texture, src_width, src_height, 0);
+
+    glDrawBuffer(GL_BACK_RIGHT);
+    post_processor->BlitFromTexture(src, dst, src_texture, src_width, src_height, 1);
+
+    glDrawBuffer(GL_BACK);
+  }
   else
   {
     post_processor->BlitFromTexture(src, dst, src_texture, src_width, src_height, 0);
@@ -1216,11 +1264,8 @@ void Renderer::ReinterpretPixelData(unsigned int convtype)
   }
 }
 
-void Renderer::SetBlendMode(bool forceUpdate)
+void Renderer::SetBlendingState(const BlendingState& state)
 {
-  BlendingState state;
-  state.Generate(bpmem);
-
   bool useDualSource =
       state.usedualsrc && g_ActiveConfig.backend_info.bSupportsDualSourceBlend &&
       (!DriverDetails::HasBug(DriverDetails::BUG_BROKEN_DUAL_SOURCE_BLENDING) || state.dstalpha);
@@ -1449,6 +1494,7 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight,
 
   // Clean out old stuff from caches. It's not worth it to clean out the shader caches.
   g_texture_cache->Cleanup(frameCount);
+  ProgramShaderCache::RetrieveAsyncShaders();
 
   // Render to the framebuffer.
   FramebufferManager::SetFramebuffer(0);
@@ -1459,6 +1505,10 @@ void Renderer::SwapImpl(u32 xfbAddr, u32 fbWidth, u32 fbStride, u32 fbHeight,
 
   UpdateActiveConfig();
   g_texture_cache->OnConfigChanged(g_ActiveConfig);
+
+  // Invalidate shader cache when the host config changes.
+  if (CheckForHostConfigChanges())
+    ProgramShaderCache::Reload();
 
   // For testing zbuffer targets.
   // Renderer::SetZBufferRender();
@@ -1693,7 +1743,7 @@ void Renderer::PrepareFrameDumpRenderTexture(u32 width, u32 height)
 
   m_frame_dump_render_texture_width = width;
   m_frame_dump_render_texture_height = height;
-  TextureCache::SetStage();
+  OGLTexture::SetStage();
 }
 
 void Renderer::DestroyFrameDumpResources()
@@ -1738,15 +1788,14 @@ void Renderer::RestoreAPIState()
   SetGenerationMode();
   BPFunctions::SetScissor();
   SetDepthMode();
-  SetBlendMode(true);
+  BPFunctions::SetBlendMode();
   SetViewport();
 
+  ProgramShaderCache::BindLastVertexFormat();
   const VertexManager* const vm = static_cast<VertexManager*>(g_vertex_manager.get());
-  glBindBuffer(GL_ARRAY_BUFFER, vm->m_vertex_buffers);
-  if (vm->m_last_vao)
-    glBindVertexArray(vm->m_last_vao);
+  glBindBuffer(GL_ARRAY_BUFFER, vm->GetVertexBufferHandle());
 
-  TextureCache::SetStage();
+  OGLTexture::SetStage();
 }
 
 void Renderer::SetGenerationMode()

@@ -4,6 +4,8 @@
 
 #include <QIcon>
 
+#include "DolphinQt2/QtUtils/ActionHelper.h"
+#include "DolphinQt2/Resources.h"
 #include "DolphinQt2/Settings.h"
 #include "DolphinQt2/ToolBar.h"
 
@@ -17,6 +19,7 @@ ToolBar::ToolBar(QWidget* parent) : QToolBar(parent)
   setIconSize(ICON_SIZE);
 
   MakeActions();
+  connect(&Settings::Instance(), &Settings::ThemeChanged, this, &ToolBar::UpdateIcons);
   UpdateIcons();
 
   EmulationStopped();
@@ -58,48 +61,46 @@ void ToolBar::EmulationStopped()
 void ToolBar::MakeActions()
 {
   constexpr int button_width = 65;
-  m_open_action = addAction(tr("Open"), this, SIGNAL(OpenPressed()));
+  m_open_action = AddAction(this, tr("Open"), this, &ToolBar::OpenPressed);
   widgetForAction(m_open_action)->setMinimumWidth(button_width);
 
-  m_play_action = addAction(tr("Play"), this, SIGNAL(PlayPressed()));
+  m_play_action = AddAction(this, tr("Play"), this, &ToolBar::PlayPressed);
   widgetForAction(m_play_action)->setMinimumWidth(button_width);
 
-  m_pause_action = addAction(tr("Pause"), this, SIGNAL(PausePressed()));
+  m_pause_action = AddAction(this, tr("Pause"), this, &ToolBar::PausePressed);
   widgetForAction(m_pause_action)->setMinimumWidth(button_width);
 
-  m_stop_action = addAction(tr("Stop"), this, SIGNAL(StopPressed()));
+  m_stop_action = AddAction(this, tr("Stop"), this, &ToolBar::StopPressed);
   widgetForAction(m_stop_action)->setMinimumWidth(button_width);
 
-  m_fullscreen_action = addAction(tr("Full Screen"), this, SIGNAL(FullScreenPressed()));
+  m_fullscreen_action = AddAction(this, tr("FullScr"), this, &ToolBar::FullScreenPressed);
   widgetForAction(m_fullscreen_action)->setMinimumWidth(button_width);
 
-  m_screenshot_action = addAction(tr("Screen Shot"), this, SIGNAL(ScreenShotPressed()));
+  m_screenshot_action = AddAction(this, tr("ScrShot"), this, &ToolBar::ScreenShotPressed);
   widgetForAction(m_screenshot_action)->setMinimumWidth(button_width);
 
   addSeparator();
 
-  m_paths_action = addAction(tr("Paths"), this, SIGNAL(PathsPressed()));
-  widgetForAction(m_paths_action)->setMinimumWidth(button_width);
-
-  m_config_action = addAction(tr("Settings"), this, SIGNAL(SettingsPressed()));
+  m_config_action = AddAction(this, tr("Config"), this, &ToolBar::SettingsPressed);
   widgetForAction(m_config_action)->setMinimumWidth(button_width);
 
-  m_controllers_action = addAction(tr("Controllers"), this, SIGNAL(ControllersPressed()));
+  m_graphics_action = AddAction(this, tr("Graphics"), this, &ToolBar::GraphicsPressed);
+  widgetForAction(m_graphics_action)->setMinimumWidth(button_width);
+
+  m_controllers_action = AddAction(this, tr("Controllers"), this, &ToolBar::ControllersPressed);
   widgetForAction(m_controllers_action)->setMinimumWidth(button_width);
   m_controllers_action->setEnabled(true);
 }
 
 void ToolBar::UpdateIcons()
 {
-  QString dir = Settings().GetThemeDir();
-
-  m_open_action->setIcon(QIcon(QStringLiteral("open.png").prepend(dir)));
-  m_paths_action->setIcon(QIcon(QStringLiteral("browse.png").prepend(dir)));
-  m_play_action->setIcon(QIcon(QStringLiteral("play.png").prepend(dir)));
-  m_pause_action->setIcon(QIcon(QStringLiteral("pause.png").prepend(dir)));
-  m_stop_action->setIcon(QIcon(QStringLiteral("stop.png").prepend(dir)));
-  m_fullscreen_action->setIcon(QIcon(QStringLiteral("fullscreen.png").prepend(dir)));
-  m_screenshot_action->setIcon(QIcon(QStringLiteral("screenshot.png").prepend(dir)));
-  m_config_action->setIcon(QIcon(QStringLiteral("config.png").prepend(dir)));
-  m_controllers_action->setIcon(QIcon(QStringLiteral("classic.png").prepend(dir)));
+  m_open_action->setIcon(Resources::GetScaledThemeIcon("open"));
+  m_play_action->setIcon(Resources::GetScaledThemeIcon("play"));
+  m_pause_action->setIcon(Resources::GetScaledThemeIcon("pause"));
+  m_stop_action->setIcon(Resources::GetScaledThemeIcon("stop"));
+  m_fullscreen_action->setIcon(Resources::GetScaledThemeIcon("fullscreen"));
+  m_screenshot_action->setIcon(Resources::GetScaledThemeIcon("screenshot"));
+  m_config_action->setIcon(Resources::GetScaledThemeIcon("config"));
+  m_controllers_action->setIcon(Resources::GetScaledThemeIcon("classic"));
+  m_graphics_action->setIcon(Resources::GetScaledThemeIcon("graphics"));
 }

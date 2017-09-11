@@ -11,12 +11,22 @@
 
 namespace DiscIO
 {
+bool IsDisc(Platform volume_type)
+{
+  return volume_type == Platform::GAMECUBE_DISC || volume_type == Platform::WII_DISC;
+}
+
+bool IsWii(Platform volume_type)
+{
+  return volume_type == Platform::WII_DISC || volume_type == Platform::WII_WAD;
+}
+
 bool IsNTSC(Region region)
 {
   return region == Region::NTSC_J || region == Region::NTSC_U || region == Region::NTSC_K;
 }
 
-// Increment CACHE_REVISION (ISOFile.cpp & GameFile.cpp) if the code below is modified
+// Increment CACHE_REVISION (GameListCtrl.cpp) if the code below is modified
 
 Country TypicalCountryForRegion(Region region)
 {
@@ -38,7 +48,7 @@ Country TypicalCountryForRegion(Region region)
 Region RegionSwitchGC(u8 country_code)
 {
   Region region = RegionSwitchWii(country_code);
-  return region == Region::NTSC_K ? Region::UNKNOWN_REGION : region;
+  return region == Region::NTSC_K ? Region::NTSC_J : region;
 }
 
 Region RegionSwitchWii(u8 country_code)

@@ -2,10 +2,14 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/HW/DVD/DVDInterface.h"
+
 #include <algorithm>
 #include <cinttypes>
 #include <memory>
+#include <optional>
 #include <string>
+#include <vector>
 
 #include "AudioCommon/AudioCommon.h"
 
@@ -18,7 +22,6 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/AudioInterface.h"
-#include "Core/HW/DVD/DVDInterface.h"
 #include "Core/HW/DVD/DVDMath.h"
 #include "Core/HW/DVD/DVDThread.h"
 #include "Core/HW/MMIO.h"
@@ -32,8 +35,7 @@
 
 #include "DiscIO/Enums.h"
 #include "DiscIO/Volume.h"
-#include "DiscIO/VolumeCreator.h"
-#include "DiscIO/VolumeWiiCrypted.h"
+#include "DiscIO/VolumeWii.h"
 
 // The minimum time it takes for the DVD drive to process a command (in
 // microseconds)
@@ -313,9 +315,8 @@ static u32 AdvanceDTK(u32 maximum_samples, u32* samples_to_process)
   {
     if (s_audio_position >= s_current_start + s_current_length)
     {
-      DEBUG_LOG(DVDINTERFACE,
-                "AdvanceDTK: NextStart=%08" PRIx64 ", NextLength=%08x, "
-                "CurrentStart=%08" PRIx64 ", CurrentLength=%08x, AudioPos=%08" PRIx64,
+      DEBUG_LOG(DVDINTERFACE, "AdvanceDTK: NextStart=%08" PRIx64 ", NextLength=%08x, "
+                              "CurrentStart=%08" PRIx64 ", CurrentLength=%08x, AudioPos=%08" PRIx64,
                 s_next_start, s_next_length, s_current_start, s_current_length, s_audio_position);
 
       s_audio_position = s_next_start;
@@ -349,8 +350,8 @@ static void DTKStreamingCallback(const std::vector<u8>& audio_data, s64 cycles_l
 
   // Determine which audio data to read next.
   static const int MAXIMUM_SAMPLES = 48000 / 2000 * 7;  // 3.5ms of 48kHz samples
-  u64 read_offset;
-  u32 read_length;
+  u64 read_offset = 0;
+  u32 read_length = 0;
   if (s_stream && AudioInterface::IsPlaying())
   {
     read_offset = s_audio_position;
@@ -436,7 +437,7 @@ void Shutdown()
   DVDThread::Stop();
 }
 
-void SetDisc(std::unique_ptr<DiscIO::IVolume> disc)
+void SetDisc(std::unique_ptr<DiscIO::Volume> disc)
 {
   if (disc)
     s_current_partition = disc->GetGamePartition();
@@ -461,7 +462,7 @@ static void EjectDiscCallback(u64 userdata, s64 cyclesLate)
 
 static void InsertDiscCallback(u64 userdata, s64 cyclesLate)
 {
-  std::unique_ptr<DiscIO::IVolume> new_volume =
+  std::unique_ptr<DiscIO::Volume> new_volume =
       DiscIO::CreateVolumeFromFilename(s_disc_path_to_insert);
 
   if (new_volume)
@@ -475,12 +476,7 @@ static void InsertDiscCallback(u64 userdata, s64 cyclesLate)
 // Can only be called by the host thread
 void ChangeDiscAsHost(const std::string& new_path)
 {
-  bool was_unpaused = Core::PauseAndLock(true);
-
-  // The host thread is now temporarily the CPU thread
-  ChangeDiscAsCPU(new_path);
-
-  Core::PauseAndLock(false, was_unpaused);
+  Core::RunAsCPUThread([&] { ChangeDiscAsCPU(new_path); });
 }
 
 // Can only be called by the CPU thread
@@ -507,28 +503,12 @@ void SetLidOpen()
     GenerateDIInterrupt(INT_CVRINT);
 }
 
-bool UpdateRunningGameMetadata(u64 title_id)
+bool UpdateRunningGameMetadata(std::optional<u64> title_id)
 {
   if (!DVDThread::HasDisc())
     return false;
 
-  const DiscIO::Partition& partition = DVDThread::GetDiscType() == DiscIO::Platform::WII_DISC ?
-                                           s_current_partition :
-                                           DiscIO::PARTITION_NONE;
-
-  return DVDThread::UpdateRunningGameMetadata(partition, title_id);
-}
-
-bool UpdateRunningGameMetadata()
-{
-  if (!DVDThread::HasDisc())
-    return false;
-
-  const DiscIO::Partition& partition = DVDThread::GetDiscType() == DiscIO::Platform::WII_DISC ?
-                                           s_current_partition :
-                                           DiscIO::PARTITION_NONE;
-
-  return DVDThread::UpdateRunningGameMetadata(partition);
+  return DVDThread::UpdateRunningGameMetadata(s_current_partition, title_id);
 }
 
 void ChangePartition(const DiscIO::Partition& partition)
@@ -850,9 +830,8 @@ void ExecuteCommand(u32 command_0, u32 command_1, u32 command_2, u32 output_addr
     {
       u64 iDVDOffset = (u64)command_1 << 2;
 
-      INFO_LOG(DVDINTERFACE,
-               "Read: DVDOffset=%08" PRIx64
-               ", DMABuffer = %08x, SrcLength = %08x, DMALength = %08x",
+      INFO_LOG(DVDINTERFACE, "Read: DVDOffset=%08" PRIx64
+                             ", DMABuffer = %08x, SrcLength = %08x, DMALength = %08x",
                iDVDOffset, output_address, command_2, output_length);
 
       command_handled_by_thread =
@@ -974,10 +953,9 @@ void ExecuteCommand(u32 command_0, u32 command_1, u32 command_2, u32 output_addr
     switch (command_0 >> 16 & 0xFF)
     {
     case 0x00:  // Returns streaming status
-      INFO_LOG(DVDINTERFACE,
-               "(Audio): Stream Status: Request Audio status "
-               "AudioPos:%08" PRIx64 "/%08" PRIx64 " "
-               "CurrentStart:%08" PRIx64 " CurrentLength:%08x",
+      INFO_LOG(DVDINTERFACE, "(Audio): Stream Status: Request Audio status "
+                             "AudioPos:%08" PRIx64 "/%08" PRIx64 " "
+                             "CurrentStart:%08" PRIx64 " CurrentLength:%08x",
                s_audio_position, s_current_start + s_current_length, s_current_start,
                s_current_length);
       WriteImmediate(s_stream ? 1 : 0, output_address, reply_to_ios);
@@ -1166,7 +1144,7 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
   // The variable dvd_offset tracks the actual offset on the DVD
   // that the disc drive starts reading at, which differs in two ways:
   // It's rounded to a whole ECC block and never uses Wii partition addressing.
-  u64 dvd_offset = DiscIO::CVolumeWiiCrypted::PartitionOffsetToRawOffset(offset, partition);
+  u64 dvd_offset = DiscIO::VolumeWii::PartitionOffsetToRawOffset(offset, partition);
   dvd_offset = Common::AlignDown(dvd_offset, DVD_ECC_BLOCK_SIZE);
 
   if (SConfig::GetInstance().bFastDiscSpeed)
@@ -1232,11 +1210,10 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
   u32 buffered_blocks = 0;
   u32 unbuffered_blocks = 0;
 
-  const u32 bytes_per_chunk = partition == DiscIO::PARTITION_NONE ?
-                                  DVD_ECC_BLOCK_SIZE :
-                                  DiscIO::CVolumeWiiCrypted::BLOCK_DATA_SIZE;
+  const u32 bytes_per_chunk =
+      partition == DiscIO::PARTITION_NONE ? DVD_ECC_BLOCK_SIZE : DiscIO::VolumeWii::BLOCK_DATA_SIZE;
 
-  while (length > 0)
+  do
   {
     // The length of this read - "+1" so that if this read is already
     // aligned to a block we'll read the entire block.
@@ -1244,6 +1221,8 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
 
     // The last chunk may be short
     chunk_length = std::min(chunk_length, length);
+
+    // TODO: If the emulated software requests 0 bytes of data, should we seek or not?
 
     if (dvd_offset >= buffer_start && dvd_offset < buffer_end)
     {
@@ -1289,7 +1268,7 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
     offset += chunk_length;
     length -= chunk_length;
     dvd_offset += DVD_ECC_BLOCK_SIZE;
-  }
+  } while (length > 0);
 
   // Update the buffer based on this read. Based on experimental testing,
   // we will only reuse the old buffer while reading forward. Note that the
@@ -1321,9 +1300,8 @@ void ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition, u
                              s_read_buffer_end_offset - s_read_buffer_start_offset, wii_disc));
   }
 
-  DEBUG_LOG(DVDINTERFACE,
-            "Schedule reads: ECC blocks unbuffered=%d, buffered=%d, "
-            "ticks=%" PRId64 ", time=%" PRId64 " us",
+  DEBUG_LOG(DVDINTERFACE, "Schedule reads: ECC blocks unbuffered=%d, buffered=%d, "
+                          "ticks=%" PRId64 ", time=%" PRId64 " us",
             unbuffered_blocks, buffered_blocks, ticks_until_completion,
             ticks_until_completion * 1000000 / SystemTimers::GetTicksPerSecond());
 }

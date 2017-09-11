@@ -8,17 +8,17 @@
 
 #include <array>
 
+class MappingWindow;
 class QDialogButtonBox;
 class QCheckBox;
 class QComboBox;
 class QHBoxLayout;
-class QFormLayout;
+class QGridLayout;
 class QGroupBox;
 class QLabel;
 class QVBoxLayout;
 class QPushButton;
 class QRadioButton;
-class QSpacerItem;
 
 class ControllersWindow final : public QDialog
 {
@@ -46,27 +46,22 @@ private:
   void ConnectWidgets();
   void LoadSettings();
 
-  // Icons
-  QString m_configure_icon;
-  QString m_gamecube_icon;
-  QString m_wii_icon;
-
   // Main
   QVBoxLayout* m_main_layout;
   QDialogButtonBox* m_button_box;
 
   // Gamecube
+  std::array<MappingWindow*, 4> m_gc_mappings;
   QGroupBox* m_gc_box;
-  QLabel* m_gc_label;
-  QFormLayout* m_gc_layout;
+  QGridLayout* m_gc_layout;
   std::array<QComboBox*, 4> m_gc_controller_boxes;
   std::array<QPushButton*, 4> m_gc_buttons;
   std::array<QHBoxLayout*, 4> m_gc_groups;
 
   // Wii Remote
+  std::array<MappingWindow*, 4> m_wiimote_mappings;
   QGroupBox* m_wiimote_box;
-  QLabel* m_wii_label;
-  QFormLayout* m_wiimote_layout;
+  QGridLayout* m_wiimote_layout;
   std::array<QLabel*, 4> m_wiimote_labels;
   std::array<QComboBox*, 4> m_wiimote_boxes;
   std::array<QPushButton*, 4> m_wiimote_buttons;

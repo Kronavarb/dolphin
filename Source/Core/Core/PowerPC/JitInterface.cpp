@@ -8,6 +8,7 @@
 #include <cinttypes>
 #include <cstdio>
 #include <string>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -17,7 +18,7 @@
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
-#include "Common/FileUtil.h"
+#include "Common/File.h"
 #include "Common/MsgHandler.h"
 
 #include "Core/Core.h"
@@ -30,7 +31,6 @@
 
 #if _M_X86
 #include "Core/PowerPC/Jit64/Jit.h"
-#include "Core/PowerPC/Jit64IL/JitIL.h"
 #endif
 
 #if _M_ARM_64
@@ -52,9 +52,6 @@ CPUCoreBase* InitJitCore(int core)
 #if _M_X86
   case PowerPC::CORE_JIT64:
     ptr = new Jit64();
-    break;
-  case PowerPC::CORE_JITIL64:
-    ptr = new JitIL();
     break;
 #endif
 #if _M_ARM_64
@@ -122,12 +119,12 @@ void GetProfileResults(ProfileStats* prof_stats)
 
   QueryPerformanceFrequency((LARGE_INTEGER*)&prof_stats->countsPerSec);
   g_jit->GetBlockCache()->RunOnBlocks([&prof_stats](const JitBlock& block) {
-    // Rough heuristic.  Mem instructions should cost more.
-    u64 cost = block.originalSize * (block.runCount / 4);
-    u64 timecost = block.ticCounter;
+    const auto& data = block.profile_data;
+    u64 cost = data.downcountCounter;
+    u64 timecost = data.ticCounter;
     // Todo: tweak.
-    if (block.runCount >= 1)
-      prof_stats->block_stats.emplace_back(block.effectiveAddress, cost, timecost, block.runCount,
+    if (data.runCount >= 1)
+      prof_stats->block_stats.emplace_back(block.effectiveAddress, cost, timecost, data.runCount,
                                            block.codeSize);
     prof_stats->cost_sum += cost;
     prof_stats->timecost_sum += timecost;

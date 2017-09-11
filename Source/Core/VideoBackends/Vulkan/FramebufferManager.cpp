@@ -22,10 +22,12 @@
 #include "VideoBackends/Vulkan/Texture2D.h"
 #include "VideoBackends/Vulkan/TextureConverter.h"
 #include "VideoBackends/Vulkan/Util.h"
+#include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VertexFormat.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 
 #include "VideoCommon/RenderBase.h"
+#include "VideoCommon/TextureConfig.h"
 #include "VideoCommon/VideoConfig.h"
 
 namespace Vulkan
@@ -433,8 +435,8 @@ void FramebufferManager::ReinterpretPixelData(int convtype)
 
   UtilityShaderDraw draw(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                          g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_STANDARD),
-                         m_efb_load_render_pass, g_object_cache->GetScreenQuadVertexShader(),
-                         g_object_cache->GetScreenQuadGeometryShader(), pixel_shader);
+                         m_efb_load_render_pass, g_shader_cache->GetScreenQuadVertexShader(),
+                         g_shader_cache->GetScreenQuadGeometryShader(), pixel_shader);
 
   RasterizationState rs_state = Util::GetNoCullRasterizationState();
   rs_state.samples = m_efb_samples;
@@ -508,8 +510,8 @@ Texture2D* FramebufferManager::ResolveEFBDepthTexture(const VkRect2D& region)
   // Draw using resolve shader to write the minimum depth of all samples to the resolve texture.
   UtilityShaderDraw draw(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                          g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_STANDARD),
-                         m_depth_resolve_render_pass, g_object_cache->GetScreenQuadVertexShader(),
-                         g_object_cache->GetScreenQuadGeometryShader(), m_ps_depth_resolve);
+                         m_depth_resolve_render_pass, g_shader_cache->GetScreenQuadVertexShader(),
+                         g_shader_cache->GetScreenQuadGeometryShader(), m_ps_depth_resolve);
   draw.BeginRenderPass(m_depth_resolve_framebuffer, region);
   draw.SetPSSampler(0, m_efb_depth_texture->GetView(), g_object_cache->GetPointSampler());
   draw.SetViewportAndScissor(region.offset.x, region.offset.y, region.extent.width,
@@ -639,7 +641,7 @@ bool FramebufferManager::CompileConversionShaders()
     }
   )";
 
-  std::string header = g_object_cache->GetUtilityShaderHeader();
+  std::string header = g_shader_cache->GetUtilityShaderHeader();
   DestroyConversionShaders();
 
   m_ps_rgb8_to_rgba6 = Util::CompileAndCreateFragmentShader(header + RGB8_TO_RGBA6_SHADER_SOURCE);
@@ -696,7 +698,7 @@ bool FramebufferManager::PopulateColorReadbackTexture()
 
     UtilityShaderDraw draw(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                            g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_STANDARD),
-                           m_copy_color_render_pass, g_object_cache->GetScreenQuadVertexShader(),
+                           m_copy_color_render_pass, g_shader_cache->GetScreenQuadVertexShader(),
                            VK_NULL_HANDLE, m_copy_color_shader);
 
     VkRect2D rect = {{0, 0}, {EFB_WIDTH, EFB_HEIGHT}};
@@ -779,7 +781,7 @@ bool FramebufferManager::PopulateDepthReadbackTexture()
 
     UtilityShaderDraw draw(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                            g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_STANDARD),
-                           m_copy_depth_render_pass, g_object_cache->GetScreenQuadVertexShader(),
+                           m_copy_depth_render_pass, g_shader_cache->GetScreenQuadVertexShader(),
                            VK_NULL_HANDLE, m_copy_depth_shader);
 
     VkRect2D rect = {{0, 0}, {EFB_WIDTH, EFB_HEIGHT}};
@@ -954,10 +956,10 @@ bool FramebufferManager::CompileReadbackShaders()
     }
   )";
 
-  source = g_object_cache->GetUtilityShaderHeader() + COPY_COLOR_SHADER_SOURCE;
+  source = g_shader_cache->GetUtilityShaderHeader() + COPY_COLOR_SHADER_SOURCE;
   m_copy_color_shader = Util::CompileAndCreateFragmentShader(source);
 
-  source = g_object_cache->GetUtilityShaderHeader() + COPY_DEPTH_SHADER_SOURCE;
+  source = g_shader_cache->GetUtilityShaderHeader() + COPY_DEPTH_SHADER_SOURCE;
   m_copy_depth_shader = Util::CompileAndCreateFragmentShader(source);
 
   return m_copy_color_shader != VK_NULL_HANDLE && m_copy_depth_shader != VK_NULL_HANDLE;
@@ -1174,7 +1176,7 @@ void FramebufferManager::DrawPokeVertices(const EFBPokeVertex* vertices, size_t 
     pipeline_info.depth_stencil_state.compare_op = VK_COMPARE_OP_ALWAYS;
   }
 
-  VkPipeline pipeline = g_object_cache->GetPipeline(pipeline_info);
+  VkPipeline pipeline = g_shader_cache->GetPipeline(pipeline_info);
   if (pipeline == VK_NULL_HANDLE)
   {
     PanicAlert("Failed to get pipeline for EFB poke draw");
@@ -1272,12 +1274,12 @@ bool FramebufferManager::CompilePokeShaders()
     layout(triangles) in;
     layout(triangle_strip, max_vertices = EFB_LAYERS * 3) out;
 
-    in VertexData
+    VARYING_LOCATION(0) in VertexData
     {
       vec4 col0;
     } in_data[];
 
-    out VertexData
+    VARYING_LOCATION(0) out VertexData
     {
       vec4 col0;
     } out_data;
@@ -1307,7 +1309,7 @@ bool FramebufferManager::CompilePokeShaders()
     }
   )";
 
-  std::string source = g_object_cache->GetUtilityShaderHeader();
+  std::string source = g_shader_cache->GetUtilityShaderHeader();
   if (m_poke_primitive_topology == VK_PRIMITIVE_TOPOLOGY_POINT_LIST)
     source += "#define USE_POINT_SIZE 1\n";
   source += POKE_VERTEX_SHADER_SOURCE;
@@ -1317,13 +1319,13 @@ bool FramebufferManager::CompilePokeShaders()
 
   if (g_vulkan_context->SupportsGeometryShaders())
   {
-    source = g_object_cache->GetUtilityShaderHeader() + POKE_GEOMETRY_SHADER_SOURCE;
+    source = g_shader_cache->GetUtilityShaderHeader() + POKE_GEOMETRY_SHADER_SOURCE;
     m_poke_geometry_shader = Util::CompileAndCreateGeometryShader(source);
     if (m_poke_geometry_shader == VK_NULL_HANDLE)
       return false;
   }
 
-  source = g_object_cache->GetUtilityShaderHeader() + POKE_PIXEL_SHADER_SOURCE;
+  source = g_shader_cache->GetUtilityShaderHeader() + POKE_PIXEL_SHADER_SOURCE;
   m_poke_fragment_shader = Util::CompileAndCreateFragmentShader(source);
   if (m_poke_fragment_shader == VK_NULL_HANDLE)
     return false;
@@ -1354,20 +1356,19 @@ std::unique_ptr<XFBSourceBase> FramebufferManager::CreateXFBSource(unsigned int 
                                                                    unsigned int target_height,
                                                                    unsigned int layers)
 {
-  TextureCacheBase::TCacheEntryConfig config;
+  TextureConfig config;
   config.width = target_width;
   config.height = target_height;
   config.layers = layers;
   config.rendertarget = true;
-  auto* base_texture = TextureCache::GetInstance()->CreateTexture(config);
-  auto* texture = static_cast<TextureCache::TCacheEntry*>(base_texture);
+  auto texture = TextureCache::GetInstance()->CreateTexture(config);
   if (!texture)
   {
     PanicAlert("Failed to create texture for XFB source");
     return nullptr;
   }
 
-  return std::make_unique<XFBSource>(std::unique_ptr<TextureCache::TCacheEntry>(texture));
+  return std::make_unique<XFBSource>(std::move(texture));
 }
 
 void FramebufferManager::CopyToRealXFB(u32 xfb_addr, u32 fb_stride, u32 fb_height,
@@ -1405,7 +1406,7 @@ void FramebufferManager::CopyToRealXFB(u32 xfb_addr, u32 fb_stride, u32 fb_heigh
   }
 }
 
-XFBSource::XFBSource(std::unique_ptr<TextureCache::TCacheEntry> texture)
+XFBSource::XFBSource(std::unique_ptr<AbstractTexture> texture)
     : XFBSourceBase(), m_texture(std::move(texture))
 {
 }
@@ -1414,13 +1415,18 @@ XFBSource::~XFBSource()
 {
 }
 
+VKTexture* XFBSource::GetTexture() const
+{
+  return static_cast<VKTexture*>(m_texture.get());
+}
+
 void XFBSource::DecodeToTexture(u32 xfb_addr, u32 fb_width, u32 fb_height)
 {
   // Guest memory -> GPU EFB Textures
   const u8* src_ptr = Memory::GetPointer(xfb_addr);
   _assert_(src_ptr);
   TextureCache::GetInstance()->GetTextureConverter()->DecodeYUYVTextureFromMemory(
-      m_texture.get(), src_ptr, fb_width, fb_width * 2, fb_height);
+      static_cast<VKTexture*>(m_texture.get()), src_ptr, fb_width, fb_width * 2, fb_height);
 }
 
 void XFBSource::CopyEFB(float gamma)
@@ -1434,7 +1440,7 @@ void XFBSource::CopyEFB(float gamma)
                       {static_cast<u32>(rect.GetWidth()), static_cast<u32>(rect.GetHeight())}};
 
   Texture2D* src_texture = FramebufferManager::GetInstance()->ResolveEFBColorTexture(vk_rect);
-  TextureCache::GetInstance()->CopyRectangleFromTexture(m_texture.get(), rect, src_texture, rect);
+  static_cast<VKTexture*>(m_texture.get())->CopyRectangleFromTexture(src_texture, rect, rect);
 
   // If we sourced directly from the EFB framebuffer, restore it to a color attachment.
   if (src_texture == FramebufferManager::GetInstance()->GetEFBColorTexture())

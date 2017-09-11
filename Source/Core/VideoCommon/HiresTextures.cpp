@@ -17,6 +17,7 @@
 #include <vector>
 #include <xxhash.h>
 
+#include "Common/File.h"
 #include "Common/FileSearch.h"
 #include "Common/FileUtil.h"
 #include "Common/Flag.h"
@@ -27,6 +28,7 @@
 #include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VideoConfig.h"
@@ -95,7 +97,7 @@ void HiresTexture::Update()
   };
 
   std::vector<std::string> filenames =
-      Common::DoFileSearch(extensions, {texture_directory}, /*recursive*/ true);
+      Common::DoFileSearch({texture_directory}, extensions, /*recursive*/ true);
 
   const std::string code = game_id + "_";
 
@@ -196,7 +198,7 @@ void HiresTexture::Prefetch()
 
     if (size_sum > max_mem)
     {
-      g_Config.bCacheHiresTextures = false;
+      Config::SetCurrent(Config::GFX_HIRES_TEXTURES, false);
 
       OSD::AddMessage(
           StringFromFormat(
@@ -213,7 +215,7 @@ void HiresTexture::Prefetch()
 }
 
 std::string HiresTexture::GenBaseName(const u8* texture, size_t texture_size, const u8* tlut,
-                                      size_t tlut_size, u32 width, u32 height, int format,
+                                      size_t tlut_size, u32 width, u32 height, TextureFormat format,
                                       bool has_mipmaps, bool dump)
 {
   std::string name = "";
@@ -383,7 +385,8 @@ u32 HiresTexture::CalculateMipCount(u32 width, u32 height)
 
 std::shared_ptr<HiresTexture> HiresTexture::Search(const u8* texture, size_t texture_size,
                                                    const u8* tlut, size_t tlut_size, u32 width,
-                                                   u32 height, int format, bool has_mipmaps)
+                                                   u32 height, TextureFormat format,
+                                                   bool has_mipmaps)
 {
   std::string base_filename =
       GenBaseName(texture, texture_size, tlut, tlut_size, width, height, format, has_mipmaps);
@@ -531,7 +534,7 @@ bool HiresTexture::LoadTexture(Level& level, const std::vector<u8>& buffer)
   // Images loaded by SOIL are converted to RGBA.
   level.width = static_cast<u32>(width);
   level.height = static_cast<u32>(height);
-  level.format = HostTextureFormat::RGBA8;
+  level.format = AbstractTextureFormat::RGBA8;
   level.data = ImageDataPointer(data, SOIL_free_image_data);
   level.row_length = level.width;
   level.data_size = static_cast<size_t>(level.row_length) * 4 * level.height;
@@ -553,7 +556,7 @@ HiresTexture::~HiresTexture()
 {
 }
 
-HostTextureFormat HiresTexture::GetFormat() const
+AbstractTextureFormat HiresTexture::GetFormat() const
 {
   return m_levels.at(0).format;
 }

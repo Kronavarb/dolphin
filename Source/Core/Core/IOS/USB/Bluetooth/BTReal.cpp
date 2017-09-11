@@ -2,18 +2,22 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "Core/IOS/USB/Bluetooth/BTReal.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <iterator>
+#include <memory>
+#include <mutex>
 #include <sstream>
+#include <string>
 #include <utility>
 #include <vector>
 
 #include <libusb.h>
 
-#include "Common/Assert.h"
 #include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
@@ -25,8 +29,6 @@
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/Device.h"
-#include "Core/IOS/USB/Bluetooth/BTReal.h"
-#include "Core/IOS/USB/Bluetooth/hci.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace IOS
@@ -198,15 +200,9 @@ IPCCommandResult BluetoothReal::IOCtlV(const IOCtlVRequest& request)
       hci_delete_stored_link_key_cp delete_cmd;
       Memory::CopyFromEmu(&delete_cmd, cmd->data_address, sizeof(delete_cmd));
       if (delete_cmd.delete_all)
-      {
         m_link_keys.clear();
-      }
       else
-      {
-        btaddr_t addr;
-        std::copy(std::begin(delete_cmd.bdaddr.b), std::end(delete_cmd.bdaddr.b), addr.begin());
-        m_link_keys.erase(addr);
-      }
+        m_link_keys.erase(delete_cmd.bdaddr);
     }
     auto buffer = std::make_unique<u8[]>(cmd->length + LIBUSB_CONTROL_SETUP_SIZE);
     libusb_fill_control_setup(buffer.get(), cmd->request_type, cmd->request, cmd->value, cmd->index,
@@ -308,7 +304,7 @@ void BluetoothReal::DoState(PointerWrap& p)
   {
     // On load, discard any pending transfer to make sure the emulated software is not stuck
     // waiting for the previous request to complete. This is usually not an issue as long as
-    // the Bluetooth state is the same (same Wii remote connections).
+    // the Bluetooth state is the same (same Wii Remote connections).
     for (const auto& address_to_discard : addresses_to_discard)
       m_ios.EnqueueIPCReply(Request{address_to_discard}, 0);
 
@@ -413,7 +409,7 @@ bool BluetoothReal::SendHCIStoreLinkKeyCommand()
   // The HCI command field is limited to uint8_t, and libusb to uint16_t.
   const u8 payload_size =
       static_cast<u8>(sizeof(hci_write_stored_link_key_cp)) +
-      (sizeof(btaddr_t) + sizeof(linkkey_t)) * static_cast<u8>(m_link_keys.size());
+      (sizeof(bdaddr_t) + sizeof(linkkey_t)) * static_cast<u8>(m_link_keys.size());
   std::vector<u8> packet(sizeof(hci_cmd_hdr_t) + payload_size);
 
   auto* header = reinterpret_cast<hci_cmd_hdr_t*>(packet.data());
@@ -517,20 +513,18 @@ void BluetoothReal::LoadLinkKeys()
   const std::string& entries = SConfig::GetInstance().m_bt_passthrough_link_keys;
   if (entries.empty())
     return;
-  std::vector<std::string> pairs;
-  SplitString(entries, ',', pairs);
-  for (const auto& pair : pairs)
+  for (const auto& pair : SplitString(entries, ','))
   {
     const auto index = pair.find('=');
     if (index == std::string::npos)
       continue;
 
-    btaddr_t address;
+    bdaddr_t address;
     Common::StringToMacAddress(pair.substr(0, index), address.data());
     std::reverse(address.begin(), address.end());
 
     const std::string& key_string = pair.substr(index + 1);
-    linkkey_t key;
+    linkkey_t key{};
     size_t pos = 0;
     for (size_t i = 0; i < key_string.length(); i = i + 2)
     {
@@ -548,7 +542,7 @@ void BluetoothReal::SaveLinkKeys()
   std::ostringstream oss;
   for (const auto& entry : m_link_keys)
   {
-    btaddr_t address;
+    bdaddr_t address;
     // Reverse the address so that it is stored in the correct order in the config file
     std::reverse_copy(entry.first.begin(), entry.first.end(), address.begin());
     oss << Common::MacAddressToString(address.data());
@@ -673,11 +667,9 @@ void BluetoothReal::HandleBulkOrIntrTransfer(libusb_transfer* tr)
       const auto* notification =
           reinterpret_cast<hci_link_key_notification_ep*>(tr->buffer + sizeof(hci_event_hdr_t));
 
-      btaddr_t addr;
-      std::copy(std::begin(notification->bdaddr.b), std::end(notification->bdaddr.b), addr.begin());
       linkkey_t key;
       std::copy(std::begin(notification->key), std::end(notification->key), std::begin(key));
-      m_link_keys[addr] = key;
+      m_link_keys[notification->bdaddr] = key;
     }
     else if (event->event == HCI_EVENT_COMMAND_COMPL &&
              reinterpret_cast<hci_command_compl_ep*>(tr->buffer + sizeof(*event))->opcode ==

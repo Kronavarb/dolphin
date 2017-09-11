@@ -29,7 +29,6 @@ static const std::map<PowerPC::CPUCore, std::string> CPU_CORE_NAMES = {
     {PowerPC::CORE_INTERPRETER, _trans("Interpreter (slowest)")},
     {PowerPC::CORE_CACHEDINTERPRETER, _trans("Cached Interpreter (slower)")},
     {PowerPC::CORE_JIT64, _trans("JIT Recompiler (recommended)")},
-    {PowerPC::CORE_JITIL64, _trans("JITIL Recompiler (slow, experimental)")},
     {PowerPC::CORE_JITARM64, _trans("JIT Arm64 (experimental)")},
 };
 
@@ -69,7 +68,7 @@ void GeneralConfigPane::InitializeGUI()
   m_throttler_choice =
       new wxChoice(this, wxID_ANY, wxDefaultPosition, wxDefaultSize, m_throttler_array_string);
   m_cpu_engine_radiobox =
-      new wxRadioBox(this, wxID_ANY, _("CPU Emulator Engine"), wxDefaultPosition, wxDefaultSize,
+      new wxRadioBox(this, wxID_ANY, _("CPU Emulation Engine"), wxDefaultPosition, wxDefaultSize,
                      m_cpu_engine_array_string, 0, wxRA_SPECIFY_ROWS);
 
   m_dual_core_checkbox->SetToolTip(
@@ -231,5 +230,5 @@ void GeneralConfigPane::OnAnalyticsCheckBoxChanged(wxCommandEvent& event)
 void GeneralConfigPane::OnAnalyticsNewIdButtonClick(wxCommandEvent& event)
 {
   DolphinAnalytics::Instance()->GenerateNewIdentity();
-  wxMessageBox(_("New identity generated."), _("Identity generation"), wxICON_INFORMATION);
+  wxMessageBox(_("New identity generated."), _("Identity Generation"), wxICON_INFORMATION);
 }

@@ -2,6 +2,8 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
+#include "VideoCommon/Fifo.h"
+
 #include <atomic>
 #include <cstring>
 
@@ -17,17 +19,16 @@
 #include "Core/ConfigManager.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
-#include "Core/HW/SystemTimers.h"
 #include "Core/Host.h"
 
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/CPMemory.h"
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/DataReader.h"
-#include "VideoCommon/Fifo.h"
 #include "VideoCommon/OpcodeDecoding.h"
 #include "VideoCommon/VertexLoaderManager.h"
 #include "VideoCommon/VertexManagerBase.h"
+#include "VideoCommon/VideoBackendBase.h"
 
 namespace Fifo
 {
@@ -144,7 +145,7 @@ void ExitGpuLoop()
 
   // Terminate GPU thread loop
   s_emu_running_state.Set();
-  s_gpu_mainloop.Stop(false);
+  s_gpu_mainloop.Stop(s_gpu_mainloop.kNonBlock);
 }
 
 void EmulatorState(bool running)
@@ -353,7 +354,7 @@ void RunGpuLoop()
                 DataReader(s_video_buffer_read_ptr, write_ptr), &cyclesExecuted, false);
 
             Common::AtomicStore(fifo.CPReadPointer, readPtr);
-            Common::AtomicAdd(fifo.CPReadWriteDistance, -32);
+            Common::AtomicAdd(fifo.CPReadWriteDistance, static_cast<u32>(-32));
             if ((write_ptr - s_video_buffer_read_ptr) == 0)
               Common::AtomicStore(fifo.SafeCPReadPointer, fifo.CPReadPointer);
 

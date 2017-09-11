@@ -9,6 +9,8 @@
 
 #include "Common/CommonTypes.h"
 
+struct BootParameters;
+
 struct GCPadStatus;
 class PointerWrap;
 struct wiimote_key;
@@ -81,7 +83,7 @@ struct DTMHeader
   bool bProgressive;
   bool bDSPHLE;
   bool bFastDiscSpeed;
-  u8 CPUCore;  // 0 = interpreter, 1 = JIT, 2 = JITIL
+  u8 CPUCore;  // Uses the values of PowerPC::CPUCore
   bool bEFBAccessEnable;
   bool bEFBCopyEnable;
   bool bSkipEFBCopyToRam;
@@ -110,7 +112,7 @@ static_assert(sizeof(DTMHeader) == 256, "DTMHeader should be 256 bytes");
 
 void FrameUpdate();
 void InputUpdate();
-void Init();
+void Init(const BootParameters& boot);
 
 void SetPolledDevice();
 
@@ -135,18 +137,9 @@ void SignalDiscChange(const std::string& new_path);
 void SetReset(bool reset);
 
 bool IsConfigSaved();
-bool IsDualCore();
-bool IsProgressive();
-bool IsPAL60();
-bool IsDSPHLE();
-bool IsFastDiscSpeed();
-int GetCPUMode();
-u8 GetLanguage();
 bool IsStartingFromClearSave();
 bool IsUsingMemcard(int memcard);
-bool IsSyncGPU();
 void SetGraphicsConfig();
-void GetSettings();
 bool IsNetPlayRecording();
 
 bool IsUsingPad(int controller);
@@ -171,8 +164,6 @@ bool PlayWiimote(int wiimote, u8* data, const struct WiimoteEmu::ReportFeatures&
 void EndPlayInput(bool cont);
 void SaveRecording(const std::string& filename);
 void DoState(PointerWrap& p);
-void CheckMD5();
-void GetMD5();
 void Shutdown();
 void CheckPadStatus(GCPadStatus* PadStatus, int controllerID);
 void CheckWiimoteStatus(int wiimote, u8* data, const struct WiimoteEmu::ReportFeatures& rptf,

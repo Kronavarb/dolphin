@@ -21,14 +21,14 @@ class PointerWrap;
 
 namespace PowerPC
 {
+// The gaps in the CPUCore numbering are from cores that only existed in the past.
+// We avoid re-numbering cores so that settings will be compatible across versions.
 enum CPUCore
 {
-  CORE_INTERPRETER,
-  CORE_JIT64,
-  CORE_JITIL64,
-  CORE_JITARM,
-  CORE_JITARM64,
-  CORE_CACHEDINTERPRETER,
+  CORE_INTERPRETER = 0,
+  CORE_JIT64 = 1,
+  CORE_JITARM64 = 4,
+  CORE_CACHEDINTERPRETER = 5,
 };
 
 enum class CoreMode
@@ -296,7 +296,7 @@ constexpr int BAT_INDEX_SHIFT = 17;
 constexpr u32 BAT_PAGE_SIZE = 1 << BAT_INDEX_SHIFT;
 constexpr u32 BAT_MAPPED_BIT = 0x1;
 constexpr u32 BAT_PHYSICAL_BIT = 0x2;
-constexpr u32 BAT_RESULT_MASK = ~0x3;
+constexpr u32 BAT_RESULT_MASK = UINT32_C(~0x3);
 using BatTable = std::array<u32, 1 << (32 - BAT_INDEX_SHIFT)>;  // 128 KB
 extern BatTable ibat_table;
 extern BatTable dbat_table;

@@ -2,8 +2,6 @@
 // Licensed under GPLv2+
 // Refer to the license.txt file included.
 
-#include "VideoBackends/Vulkan/Renderer.h"
-
 #include <cstddef>
 #include <cstdio>
 #include <limits>
@@ -23,16 +21,19 @@
 #include "VideoBackends/Vulkan/ObjectCache.h"
 #include "VideoBackends/Vulkan/PostProcessing.h"
 #include "VideoBackends/Vulkan/RasterFont.h"
+#include "VideoBackends/Vulkan/Renderer.h"
 #include "VideoBackends/Vulkan/StagingTexture2D.h"
 #include "VideoBackends/Vulkan/StateTracker.h"
 #include "VideoBackends/Vulkan/SwapChain.h"
 #include "VideoBackends/Vulkan/TextureCache.h"
 #include "VideoBackends/Vulkan/Util.h"
+#include "VideoBackends/Vulkan/VKTexture.h"
 #include "VideoBackends/Vulkan/VulkanContext.h"
 
 #include "VideoCommon/AVIDump.h"
 #include "VideoCommon/BPFunctions.h"
 #include "VideoCommon/BPMemory.h"
+#include "VideoCommon/DriverDetails.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/PixelEngine.h"
 #include "VideoCommon/PixelShaderManager.h"
@@ -50,7 +51,6 @@ Renderer::Renderer(std::unique_ptr<SwapChain> swap_chain)
                  swap_chain ? static_cast<int>(swap_chain->GetHeight()) : 0),
       m_swap_chain(std::move(swap_chain))
 {
-  g_Config.bRunning = true;
   UpdateActiveConfig();
 
   // Set to something invalid, forcing all states to be re-initialized.
@@ -60,7 +60,6 @@ Renderer::Renderer(std::unique_ptr<SwapChain> swap_chain)
 
 Renderer::~Renderer()
 {
-  g_Config.bRunning = false;
   UpdateActiveConfig();
 
   // Ensure all frames are written to frame dump at shutdown.
@@ -114,9 +113,6 @@ bool Renderer::Initialize()
                                                m_bounding_box->GetGPUBufferOffset(),
                                                m_bounding_box->GetGPUBufferSize());
   }
-
-  // Ensure all pipelines previously used by the game have been created.
-  StateTracker::GetInstance()->LoadPipelineUIDCache();
 
   // Initialize post processing.
   m_post_processor = std::make_unique<VulkanPostProcessing>();
@@ -331,6 +327,10 @@ void Renderer::BeginFrame()
   // Activate a new command list, and restore state ready for the next draw
   g_command_buffer_mgr->ActivateCommandBuffer();
 
+  // Restore the EFB color texture to color attachment ready for rendering the next frame.
+  FramebufferManager::GetInstance()->GetEFBColorTexture()->TransitionToLayout(
+      g_command_buffer_mgr->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
+
   // Ensure that the state tracker rebinds everything, and allocates a new set
   // of descriptors out of the next pool.
   StateTracker::GetInstance()->InvalidateDescriptorSets();
@@ -375,12 +375,23 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool color_enable, bool alpha
 
   // If we're not in a render pass (start of the frame), we can use a clear render pass
   // to discard the data, rather than loading and then clearing.
-  bool use_clear_render_pass = (color_enable && alpha_enable && z_enable);
-  if (StateTracker::GetInstance()->InRenderPass())
+  bool use_clear_attachments = (color_enable && alpha_enable) || z_enable;
+  bool use_clear_render_pass =
+      !StateTracker::GetInstance()->InRenderPass() && color_enable && alpha_enable && z_enable;
+
+  // The NVIDIA Vulkan driver causes the GPU to lock up, or throw exceptions if MSAA is enabled,
+  // a non-full clear rect is specified, and a clear loadop or vkCmdClearAttachments is used.
+  if (g_ActiveConfig.iMultisamples > 1 &&
+      DriverDetails::HasBug(DriverDetails::BUG_BROKEN_MSAA_CLEAR))
   {
-    // Prefer not to end a render pass just to do a clear.
     use_clear_render_pass = false;
+    use_clear_attachments = false;
   }
+
+  // This path cannot be used if the driver implementation doesn't guarantee pixels with no drawn
+  // geometry in "this" renderpass won't be cleared
+  if (DriverDetails::HasBug(DriverDetails::BUG_BROKEN_CLEAR_LOADOP_RENDERPASS))
+    use_clear_render_pass = false;
 
   // Fastest path: Use a render pass to clear the buffers.
   if (use_clear_render_pass)
@@ -392,6 +403,7 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool color_enable, bool alpha
 
   // Fast path: Use vkCmdClearAttachments to clear the buffers within a render path
   // We can't use this when preserving alpha but clearing color.
+  if (use_clear_attachments)
   {
     VkClearAttachment clear_attachments[2];
     uint32_t num_clear_attachments = 0;
@@ -460,8 +472,8 @@ void Renderer::ClearScreen(const EFBRectangle& rc, bool color_enable, bool alpha
   UtilityShaderDraw draw(g_command_buffer_mgr->GetCurrentCommandBuffer(),
                          g_object_cache->GetPipelineLayout(PIPELINE_LAYOUT_STANDARD),
                          FramebufferManager::GetInstance()->GetEFBLoadRenderPass(),
-                         g_object_cache->GetPassthroughVertexShader(),
-                         g_object_cache->GetPassthroughGeometryShader(), m_clear_fragment_shader);
+                         g_shader_cache->GetPassthroughVertexShader(),
+                         g_shader_cache->GetPassthroughGeometryShader(), m_clear_fragment_shader);
 
   draw.SetRasterizationState(rs_state);
   draw.SetDepthStencilState(depth_state);
@@ -518,8 +530,7 @@ void Renderer::SwapImpl(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height
   // If MSAA is enabled, and we're not using XFB, we need to resolve the EFB framebuffer before
   // rendering the final image to the screen, or dumping the frame. This is because we can't resolve
   // an image within a render pass, which will have already started by the time it is used.
-  if (g_ActiveConfig.iMultisamples > 1 && !g_ActiveConfig.bUseXFB)
-    ResolveEFBForSwap(scaled_efb_rect);
+  TransitionBuffersForSwap(scaled_efb_rect, xfb_sources, xfb_count);
 
   // Render the frame dump image if enabled.
   if (IsFrameDumping())
@@ -588,18 +599,49 @@ void Renderer::SwapImpl(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height
 
   // Clean up stale textures.
   TextureCache::GetInstance()->Cleanup(frameCount);
+
+  // Pull in now-ready async shaders.
+  g_shader_cache->RetrieveAsyncShaders();
 }
 
-void Renderer::ResolveEFBForSwap(const TargetRectangle& scaled_rect)
+void Renderer::TransitionBuffersForSwap(const TargetRectangle& scaled_rect,
+                                        const XFBSourceBase* const* xfb_sources, u32 xfb_count)
 {
-  // While the source rect can be out-of-range when drawing, the resolve rectangle must be within
-  // the bounds of the texture.
-  VkRect2D region = {
-      {scaled_rect.left, scaled_rect.top},
-      {static_cast<u32>(scaled_rect.GetWidth()), static_cast<u32>(scaled_rect.GetHeight())}};
-  region = Util::ClampRect2D(region, FramebufferManager::GetInstance()->GetEFBWidth(),
-                             FramebufferManager::GetInstance()->GetEFBHeight());
-  FramebufferManager::GetInstance()->ResolveEFBColorTexture(region);
+  VkCommandBuffer command_buffer = g_command_buffer_mgr->GetCurrentCommandBuffer();
+
+  if (!g_ActiveConfig.bUseXFB)
+  {
+    // Drawing EFB direct.
+    if (g_ActiveConfig.iMultisamples > 1)
+    {
+      // While the source rect can be out-of-range when drawing, the resolve rectangle must be
+      // within the bounds of the texture.
+      VkRect2D region = {
+          {scaled_rect.left, scaled_rect.top},
+          {static_cast<u32>(scaled_rect.GetWidth()), static_cast<u32>(scaled_rect.GetHeight())}};
+      region = Util::ClampRect2D(region, FramebufferManager::GetInstance()->GetEFBWidth(),
+                                 FramebufferManager::GetInstance()->GetEFBHeight());
+
+      Vulkan::Texture2D* rtex = FramebufferManager::GetInstance()->ResolveEFBColorTexture(region);
+      rtex->TransitionToLayout(command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+    else
+    {
+      FramebufferManager::GetInstance()->GetEFBColorTexture()->TransitionToLayout(
+          command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+    }
+
+    return;
+  }
+
+  // Drawing XFB sources, so transition all of them.
+  // Don't need the EFB, so leave it as-is.
+  for (u32 i = 0; i < xfb_count; i++)
+  {
+    const XFBSource* xfb_source = static_cast<const XFBSource*>(xfb_sources[i]);
+    xfb_source->GetTexture()->GetRawTexIdentifier()->TransitionToLayout(
+        command_buffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+  }
 }
 
 void Renderer::DrawFrame(VkRenderPass render_pass, const TargetRectangle& target_rect,
@@ -624,18 +666,9 @@ void Renderer::DrawEFB(VkRenderPass render_pass, const TargetRectangle& target_r
       g_ActiveConfig.iMultisamples > 1 ?
           FramebufferManager::GetInstance()->GetResolvedEFBColorTexture() :
           FramebufferManager::GetInstance()->GetEFBColorTexture();
-  efb_color_texture->TransitionToLayout(g_command_buffer_mgr->GetCurrentCommandBuffer(),
-                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
   // Copy EFB -> backbuffer
   BlitScreen(render_pass, target_rect, scaled_efb_rect, efb_color_texture);
-
-  // Restore the EFB color texture to color attachment ready for rendering the next frame.
-  if (efb_color_texture == FramebufferManager::GetInstance()->GetEFBColorTexture())
-  {
-    FramebufferManager::GetInstance()->GetEFBColorTexture()->TransitionToLayout(
-        g_command_buffer_mgr->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
-  }
 }
 
 void Renderer::DrawVirtualXFB(VkRenderPass render_pass, const TargetRectangle& target_rect,
@@ -645,9 +678,6 @@ void Renderer::DrawVirtualXFB(VkRenderPass render_pass, const TargetRectangle& t
   for (u32 i = 0; i < xfb_count; ++i)
   {
     const XFBSource* xfb_source = static_cast<const XFBSource*>(xfb_sources[i]);
-    xfb_source->GetTexture()->GetTexture()->TransitionToLayout(
-        g_command_buffer_mgr->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
     TargetRectangle source_rect = xfb_source->sourceRc;
     TargetRectangle draw_rect;
 
@@ -670,7 +700,8 @@ void Renderer::DrawVirtualXFB(VkRenderPass render_pass, const TargetRectangle& t
                           2;
 
     source_rect.right -= Renderer::EFBToScaledX(fb_stride - fb_width);
-    BlitScreen(render_pass, draw_rect, source_rect, xfb_source->GetTexture()->GetTexture());
+    BlitScreen(render_pass, draw_rect, source_rect,
+               xfb_source->GetTexture()->GetRawTexIdentifier());
   }
 }
 
@@ -681,13 +712,11 @@ void Renderer::DrawRealXFB(VkRenderPass render_pass, const TargetRectangle& targ
   for (u32 i = 0; i < xfb_count; ++i)
   {
     const XFBSource* xfb_source = static_cast<const XFBSource*>(xfb_sources[i]);
-    xfb_source->GetTexture()->GetTexture()->TransitionToLayout(
-        g_command_buffer_mgr->GetCurrentCommandBuffer(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-
     TargetRectangle source_rect = xfb_source->sourceRc;
     TargetRectangle draw_rect = target_rect;
     source_rect.right -= fb_stride - fb_width;
-    BlitScreen(render_pass, draw_rect, source_rect, xfb_source->GetTexture()->GetTexture());
+    BlitScreen(render_pass, draw_rect, source_rect,
+               xfb_source->GetTexture()->GetRawTexIdentifier());
   }
 }
 
@@ -933,6 +962,10 @@ void Renderer::BlitScreen(VkRenderPass render_pass, const TargetRectangle& dst_r
     post_processor->BlitFromTexture(left_rect, src_rect, src_tex, 0, render_pass);
     post_processor->BlitFromTexture(right_rect, src_rect, src_tex, 1, render_pass);
   }
+  else if (g_ActiveConfig.iStereoMode == STEREO_QUADBUFFER)
+  {
+    post_processor->BlitFromTexture(dst_rect, src_rect, src_tex, -1, render_pass);
+  }
   else
   {
     post_processor->BlitFromTexture(dst_rect, src_rect, src_tex, 0, render_pass);
@@ -1106,13 +1139,10 @@ void Renderer::CheckForSurfaceChange()
 void Renderer::CheckForConfigChanges()
 {
   // Save the video config so we can compare against to determine which settings have changed.
-  int old_multisamples = g_ActiveConfig.iMultisamples;
   int old_anisotropy = g_ActiveConfig.iMaxAnisotropy;
-  int old_stereo_mode = g_ActiveConfig.iStereoMode;
   int old_aspect_ratio = g_ActiveConfig.iAspectRatio;
   int old_efb_scale = g_ActiveConfig.iEFBScale;
   bool old_force_filtering = g_ActiveConfig.bForceFiltering;
-  bool old_ssaa = g_ActiveConfig.bSSAA;
   bool old_use_xfb = g_ActiveConfig.bUseXFB;
   bool old_use_realxfb = g_ActiveConfig.bUseRealXFB;
 
@@ -1122,11 +1152,8 @@ void Renderer::CheckForConfigChanges()
   UpdateActiveConfig();
 
   // Determine which (if any) settings have changed.
-  bool msaa_changed = old_multisamples != g_ActiveConfig.iMultisamples;
-  bool ssaa_changed = old_ssaa != g_ActiveConfig.bSSAA;
   bool anisotropy_changed = old_anisotropy != g_ActiveConfig.iMaxAnisotropy;
   bool force_texture_filtering_changed = old_force_filtering != g_ActiveConfig.bForceFiltering;
-  bool stereo_changed = old_stereo_mode != g_ActiveConfig.iStereoMode;
   bool efb_scale_changed = old_efb_scale != g_ActiveConfig.iEFBScale;
   bool aspect_changed = old_aspect_ratio != g_ActiveConfig.iAspectRatio;
   bool use_xfb_changed = old_use_xfb != g_ActiveConfig.bUseXFB;
@@ -1144,23 +1171,20 @@ void Renderer::CheckForConfigChanges()
 
   // MSAA samples changed, we need to recreate the EFB render pass.
   // If the stereoscopy mode changed, we need to recreate the buffers as well.
-  if (msaa_changed || stereo_changed)
+  // SSAA changed on/off, we have to recompile shaders.
+  // Changing stereoscopy from off<->on also requires shaders to be recompiled.
+  if (CheckForHostConfigChanges())
   {
     g_command_buffer_mgr->WaitForGPUIdle();
     FramebufferManager::GetInstance()->RecreateRenderPass();
     FramebufferManager::GetInstance()->ResizeEFBTextures();
     BindEFBToStateTracker();
-  }
-
-  // SSAA changed on/off, we can leave the buffers/render pass, but have to recompile shaders.
-  // Changing stereoscopy from off<->on also requires shaders to be recompiled.
-  if (msaa_changed || ssaa_changed || stereo_changed)
-  {
-    g_command_buffer_mgr->WaitForGPUIdle();
     RecompileShaders();
     FramebufferManager::GetInstance()->RecompileShaders();
-    g_object_cache->RecompileSharedShaders();
-    StateTracker::GetInstance()->LoadPipelineUIDCache();
+    g_shader_cache->ReloadShaderAndPipelineCaches();
+    g_shader_cache->RecompileSharedShaders();
+    StateTracker::GetInstance()->InvalidateShaderPointers();
+    StateTracker::GetInstance()->ReloadPipelineUIDCache();
   }
 
   // For vsync, we need to change the present mode, which means recreating the swap chain.
@@ -1169,6 +1193,11 @@ void Renderer::CheckForConfigChanges()
     g_command_buffer_mgr->WaitForGPUIdle();
     m_swap_chain->SetVSync(g_ActiveConfig.IsVSync());
   }
+
+  // For quad-buffered stereo we need to change the layer count, so recreate the swap chain.
+  if (m_swap_chain &&
+      (g_ActiveConfig.iStereoMode == STEREO_QUADBUFFER) != m_swap_chain->IsStereoEnabled())
+    ResizeSwapChain();
 
   // Wipe sampler cache if force texture filtering or anisotropy changes.
   if (anisotropy_changed || force_texture_filtering_changed)
@@ -1315,11 +1344,8 @@ void Renderer::SetDepthMode()
   StateTracker::GetInstance()->SetDepthStencilState(new_ds_state);
 }
 
-void Renderer::SetBlendMode(bool force_update)
+void Renderer::SetBlendingState(const BlendingState& state)
 {
-  BlendingState state;
-  state.Generate(bpmem);
-
   StateTracker::GetInstance()->SetBlendState(state);
 }
 
@@ -1484,7 +1510,7 @@ bool Renderer::CompileShaders()
 
   )";
 
-  std::string source = g_object_cache->GetUtilityShaderHeader() + CLEAR_FRAGMENT_SHADER_SOURCE;
+  std::string source = g_shader_cache->GetUtilityShaderHeader() + CLEAR_FRAGMENT_SHADER_SOURCE;
   m_clear_fragment_shader = Util::CompileAndCreateFragmentShader(source);
 
   return m_clear_fragment_shader != VK_NULL_HANDLE;

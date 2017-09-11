@@ -18,15 +18,13 @@
 #include "Common/MsgHandler.h"
 
 #include "Core/Analytics.h"
+#include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
-#include "Core/HW/Wiimote.h"
 #include "Core/Host.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/STM/STM.h"
-#include "Core/IOS/USB/Bluetooth/BTEmu.h"
-#include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/State.h"
 
 #include "UICommon/CommandLineParse.h"
@@ -115,14 +113,7 @@ void Host_RequestRenderWindowSize(int width, int height)
 {
 }
 
-void Host_SetStartupDebuggingParameters()
-{
-  SConfig& StartUp = SConfig::GetInstance();
-  StartUp.bEnableDebugging = false;
-  StartUp.bBootToPause = false;
-}
-
-bool Host_UIHasFocus()
+bool Host_UINeedsControllerState()
 {
   return false;
 }
@@ -137,26 +128,6 @@ bool Host_RendererIsFullscreen()
   return rendererIsFullscreen;
 }
 
-void Host_ConnectWiimote(int wm_idx, bool connect)
-{
-  Core::QueueHostJob([=] {
-    const auto ios = IOS::HLE::GetIOS();
-    if (!ios || SConfig::GetInstance().m_bt_passthrough_enabled)
-      return;
-    bool was_unpaused = Core::PauseAndLock(true);
-    const auto bt = std::static_pointer_cast<IOS::HLE::Device::BluetoothEmu>(
-        ios->GetDeviceByName("/dev/usb/oh1/57e/305"));
-    if (bt)
-      bt->AccessWiiMote(wm_idx | 0x100)->Activate(connect);
-    Host_UpdateMainFrame();
-    Core::PauseAndLock(false, was_unpaused);
-  });
-}
-
-void Host_SetWiiMoteConnectionState(int _State)
-{
-}
-
 void Host_ShowVideoConfig(void*, const std::string&)
 {
 }
@@ -165,7 +136,12 @@ void Host_YieldToUI()
 {
 }
 
+void Host_UpdateProgressDialog(const char* caption, int position, int total)
+{
+}
+
 #if HAVE_X11
+#include <X11/Xlib.h>
 #include <X11/keysym.h>
 #include "UICommon/X11Utils.h"
 
@@ -370,7 +346,7 @@ class PlatformX11 : public Platform
 
 static Platform* GetPlatform()
 {
-#if defined(USE_EGL) && defined(USE_HEADLESS)
+#if defined(USE_HEADLESS)
   return new Platform();
 #elif HAVE_X11
   return new PlatformX11();
@@ -429,7 +405,7 @@ int main(int argc, char* argv[])
 
   DolphinAnalytics::Instance()->ReportDolphinStart("nogui");
 
-  if (!BootManager::BootCore(boot_filename))
+  if (!BootManager::BootCore(BootParameters::GenerateFromFile(boot_filename)))
   {
     fprintf(stderr, "Could not boot %s\n", boot_filename.c_str());
     return 1;
