@@ -22,6 +22,8 @@
 #include "Core/IOS/IOS.h"
 #include "Core/Movie.h"
 #include "Core/State.h"
+#include "Core/TitleDatabase.h"
+#include "Core/WiiUtils.h"
 #include "DiscIO/NANDImporter.h"
 #include "DolphinQt2/AboutDialog.h"
 #include "DolphinQt2/GameList/GameFile.h"
@@ -38,64 +40,42 @@ MenuBar::MenuBar(QWidget* parent) : QMenuBar(parent)
   AddViewMenu();
   AddHelpMenu();
 
-  EmulationStopped();
+  connect(&Settings::Instance(), &Settings::EmulationStateChanged, this,
+          [=](Core::State state) { OnEmulationStateChanged(state); });
+  OnEmulationStateChanged(Core::GetState());
 
   connect(this, &MenuBar::SelectionChanged, this, &MenuBar::OnSelectionChanged);
   connect(this, &MenuBar::RecordingStatusChanged, this, &MenuBar::OnRecordingStatusChanged);
   connect(this, &MenuBar::ReadOnlyModeChanged, this, &MenuBar::OnReadOnlyModeChanged);
 }
 
-void MenuBar::EmulationStarted()
+void MenuBar::OnEmulationStateChanged(Core::State state)
 {
+  bool running = state != Core::State::Uninitialized;
+  bool playing = running && state != Core::State::Paused;
+
   // Emulation
-  m_play_action->setEnabled(false);
-  m_play_action->setVisible(false);
-  m_pause_action->setEnabled(true);
-  m_pause_action->setVisible(true);
-  m_stop_action->setEnabled(true);
-  m_reset_action->setEnabled(true);
-  m_fullscreen_action->setEnabled(true);
-  m_frame_advance_action->setEnabled(true);
-  m_screenshot_action->setEnabled(true);
-  m_state_load_menu->setEnabled(true);
-  m_state_save_menu->setEnabled(true);
+  m_play_action->setEnabled(!playing);
+  m_play_action->setVisible(!playing);
+  m_pause_action->setEnabled(playing);
+  m_pause_action->setVisible(playing);
+  m_stop_action->setEnabled(running);
+  m_stop_action->setVisible(running);
+  m_reset_action->setEnabled(running);
+  m_fullscreen_action->setEnabled(running);
+  m_frame_advance_action->setEnabled(running);
+  m_screenshot_action->setEnabled(running);
+  m_state_load_menu->setEnabled(running);
+  m_state_save_menu->setEnabled(running);
 
   // Movie
-  m_recording_read_only->setEnabled(true);
-  m_recording_play->setEnabled(false);
+  m_recording_read_only->setEnabled(running);
+  if (!running)
+    m_recording_stop->setEnabled(false);
+  m_recording_play->setEnabled(!running);
 
   UpdateStateSlotMenu();
-  UpdateToolsMenu(true);
-}
-void MenuBar::EmulationPaused()
-{
-  m_play_action->setEnabled(true);
-  m_play_action->setVisible(true);
-  m_pause_action->setEnabled(false);
-  m_pause_action->setVisible(false);
-}
-void MenuBar::EmulationStopped()
-{
-  // Emulation
-  m_play_action->setEnabled(true);
-  m_play_action->setVisible(true);
-  m_pause_action->setEnabled(false);
-  m_pause_action->setVisible(false);
-  m_stop_action->setEnabled(false);
-  m_reset_action->setEnabled(false);
-  m_fullscreen_action->setEnabled(false);
-  m_frame_advance_action->setEnabled(false);
-  m_screenshot_action->setEnabled(false);
-  m_state_load_menu->setEnabled(false);
-  m_state_save_menu->setEnabled(false);
-
-  // Movie
-  m_recording_read_only->setEnabled(false);
-  m_recording_stop->setEnabled(false);
-  m_recording_play->setEnabled(false);
-
-  UpdateStateSlotMenu();
-  UpdateToolsMenu(false);
+  UpdateToolsMenu(running);
 }
 
 void MenuBar::AddFileMenu()
@@ -136,7 +116,7 @@ void MenuBar::AddToolsMenu()
       AddAction(tools_menu, QStringLiteral(""), this, [this] { emit BootWiiSystemMenu(); });
   m_import_backup = AddAction(gc_ipl, tr("Import BootMii NAND Backup..."), this,
                               [this] { emit ImportNANDBackup(); });
-
+  m_check_nand = AddAction(tools_menu, tr("Check NAND..."), this, &MenuBar::CheckNAND);
   m_extract_certificates = AddAction(tools_menu, tr("Extract Certificates from NAND"), this,
                                      &MenuBar::NANDExtractCertificates);
 
@@ -328,13 +308,14 @@ void MenuBar::AddListColumnsMenu(QMenu* view_menu)
 {
   static const QMap<QString, bool*> columns{
       {tr("Platform"), &SConfig::GetInstance().m_showSystemColumn},
-      {tr("ID"), &SConfig::GetInstance().m_showIDColumn},
       {tr("Banner"), &SConfig::GetInstance().m_showBannerColumn},
       {tr("Title"), &SConfig::GetInstance().m_showTitleColumn},
       {tr("Description"), &SConfig::GetInstance().m_showDescriptionColumn},
       {tr("Maker"), &SConfig::GetInstance().m_showMakerColumn},
-      {tr("Size"), &SConfig::GetInstance().m_showSizeColumn},
-      {tr("Country"), &SConfig::GetInstance().m_showRegionColumn},
+      {tr("File Name"), &SConfig::GetInstance().m_showFileNameColumn},
+      {tr("Game ID"), &SConfig::GetInstance().m_showIDColumn},
+      {tr("Region"), &SConfig::GetInstance().m_showRegionColumn},
+      {tr("File Size"), &SConfig::GetInstance().m_showSizeColumn},
       {tr("State"), &SConfig::GetInstance().m_showStateColumn}};
 
   QActionGroup* column_group = new QActionGroup(this);
@@ -494,6 +475,7 @@ void MenuBar::UpdateToolsMenu(bool emulation_started)
   m_pal_ipl->setEnabled(!emulation_started &&
                         File::Exists(SConfig::GetInstance().GetBootROMPath(EUR_DIR)));
   m_import_backup->setEnabled(!emulation_started);
+  m_check_nand->setEnabled(!emulation_started);
 
   if (!emulation_started)
   {
@@ -551,6 +533,51 @@ void MenuBar::ImportWiiSave()
 void MenuBar::ExportWiiSaves()
 {
   CWiiSaveCrypted::ExportAllSaves();
+}
+
+void MenuBar::CheckNAND()
+{
+  IOS::HLE::Kernel ios;
+  WiiUtils::NANDCheckResult result = WiiUtils::CheckNAND(ios);
+  if (!result.bad)
+  {
+    QMessageBox::information(this, tr("NAND Check"), tr("No issues have been detected."));
+    return;
+  }
+
+  QString message = tr("The emulated NAND is damaged. System titles such as the Wii Menu and "
+                       "the Wii Shop Channel may not work correctly.\n\n"
+                       "Do you want to try to repair the NAND?");
+  if (!result.titles_to_remove.empty())
+  {
+    message += tr("\n\nWARNING: Fixing this NAND requires the deletion of titles that have "
+                  "incomplete data on the NAND, including all associated save data. "
+                  "By continuing, the following title(s) will be removed:\n\n");
+    Core::TitleDatabase title_db;
+    for (const u64 title_id : result.titles_to_remove)
+    {
+      const std::string name = title_db.GetTitleName(title_id);
+      message += !name.empty() ?
+                     QStringLiteral("%1 (%2)")
+                         .arg(QString::fromStdString(name))
+                         .arg(title_id, 16, 16, QLatin1Char('0')) :
+                     QStringLiteral("%1").arg(title_id, 16, 16, QLatin1Char('0'));
+      message += QStringLiteral("\n");
+    }
+  }
+
+  if (QMessageBox::question(this, tr("NAND Check"), message) != QMessageBox::Yes)
+    return;
+
+  if (WiiUtils::RepairNAND(ios))
+  {
+    QMessageBox::information(this, tr("NAND Check"), tr("The NAND has been repaired."));
+    return;
+  }
+
+  QMessageBox::critical(this, tr("NAND Check"),
+                        tr("The NAND could not be repaired. It is recommended to back up "
+                           "your current data and start over with a fresh NAND."));
 }
 
 void MenuBar::NANDExtractCertificates()

@@ -127,6 +127,7 @@ void CFrame::BindMenuBarEvents()
   // File menu
   Bind(wxEVT_MENU, &CFrame::OnOpen, this, wxID_OPEN);
   Bind(wxEVT_MENU, &CFrame::OnChangeDisc, this, IDM_CHANGE_DISC);
+  Bind(wxEVT_MENU, &CFrame::OnEjectDisc, this, IDM_EJECT_DISC);
   Bind(wxEVT_MENU, &CFrame::OnBootDrive, this, IDM_DRIVE1, IDM_DRIVE24);
   Bind(wxEVT_MENU, &CFrame::OnRefresh, this, wxID_REFRESH);
   Bind(wxEVT_MENU, &CFrame::OnQuit, this, wxID_EXIT);
@@ -184,6 +185,7 @@ void CFrame::BindMenuBarEvents()
   Bind(wxEVT_MENU, &CFrame::OnInstallWAD, this, IDM_MENU_INSTALL_WAD);
   Bind(wxEVT_MENU, &CFrame::OnLoadWiiMenu, this, IDM_LOAD_WII_MENU);
   Bind(wxEVT_MENU, &CFrame::OnImportBootMiiBackup, this, IDM_IMPORT_NAND);
+  Bind(wxEVT_MENU, &CFrame::OnCheckNAND, this, IDM_CHECK_NAND);
   Bind(wxEVT_MENU, &CFrame::OnExtractCertificates, this, IDM_EXTRACT_CERTIFICATES);
   for (const int idm : {IDM_PERFORM_ONLINE_UPDATE_CURRENT, IDM_PERFORM_ONLINE_UPDATE_EUR,
                         IDM_PERFORM_ONLINE_UPDATE_JPN, IDM_PERFORM_ONLINE_UPDATE_KOR,
@@ -369,7 +371,7 @@ void CFrame::DoOpen(bool Boot)
   }
   else
   {
-    DVDInterface::ChangeDiscAsHost(WxStrToStr(path));
+    Core::RunAsCPUThread([&path] { DVDInterface::ChangeDisc(WxStrToStr(path)); });
   }
 }
 
@@ -446,7 +448,7 @@ void CFrame::OnFrameStep(wxCommandEvent& event)
 {
   bool wasPaused = Core::GetState() == Core::State::Paused;
 
-  Movie::DoFrameStep();
+  Core::DoFrameStep();
 
   bool isPaused = Core::GetState() == Core::State::Paused;
   if (isPaused && !wasPaused)  // don't update on unpause, otherwise the status would be wrong when
@@ -457,6 +459,11 @@ void CFrame::OnFrameStep(wxCommandEvent& event)
 void CFrame::OnChangeDisc(wxCommandEvent& WXUNUSED(event))
 {
   DoOpen(false);
+}
+
+void CFrame::OnEjectDisc(wxCommandEvent& WXUNUSED(event))
+{
+  Core::RunAsCPUThread(DVDInterface::EjectDisc);
 }
 
 void CFrame::OnRecord(wxCommandEvent& WXUNUSED(event))
@@ -705,7 +712,6 @@ void CFrame::StartGame(std::unique_ptr<BootParameters> boot)
     // To capture key events on Linux and Mac OS X the frame needs at least one child.
     m_render_parent = new wxPanel(m_render_frame, IDM_MPANEL, wxDefaultPosition, wxDefaultSize, 0);
 #endif
-
     m_render_frame->Show();
   }
 
@@ -754,6 +760,8 @@ void CFrame::StartGame(std::unique_ptr<BootParameters> boot)
     wxTheApp->Bind(wxEVT_MIDDLE_UP, &CFrame::OnMouse, this);
     wxTheApp->Bind(wxEVT_MOTION, &CFrame::OnMouse, this);
     m_render_parent->Bind(wxEVT_SIZE, &CFrame::OnRenderParentResize, this);
+
+    m_render_parent->SetCursor(wxCURSOR_BLANK);
   }
 }
 
@@ -903,6 +911,9 @@ void CFrame::DoStop()
 
       return;
     }
+
+    // Reshow the cursor on the parent frame after successful stop.
+    m_render_parent->SetCursor(wxNullCursor);
 
     Core::Stop();
     UpdateGUI();
@@ -1298,6 +1309,48 @@ void CFrame::OnImportBootMiiBackup(wxCommandEvent& WXUNUSED(event))
   UpdateLoadWiiMenuItem();
 }
 
+void CFrame::OnCheckNAND(wxCommandEvent&)
+{
+  IOS::HLE::Kernel ios;
+  WiiUtils::NANDCheckResult result = WiiUtils::CheckNAND(ios);
+  if (!result.bad)
+  {
+    wxMessageBox(_("No issues have been detected."), _("NAND Check"), wxOK | wxICON_INFORMATION);
+    return;
+  }
+
+  wxString message = _("The emulated NAND is damaged. System titles such as the Wii Menu and "
+                       "the Wii Shop Channel may not work correctly.\n\n"
+                       "Do you want to try to repair the NAND?");
+  if (!result.titles_to_remove.empty())
+  {
+    message += _("\n\nWARNING: Fixing this NAND requires the deletion of titles that have "
+                 "incomplete data on the NAND, including all associated save data. "
+                 "By continuing, the following title(s) will be removed:\n\n");
+    Core::TitleDatabase title_db;
+    for (const u64 title_id : result.titles_to_remove)
+    {
+      const std::string name = title_db.GetTitleName(title_id);
+      message += !name.empty() ? StringFromFormat("%s (%016" PRIx64 ")", name.c_str(), title_id) :
+                                 StringFromFormat("%016" PRIx64, title_id);
+      message += "\n";
+    }
+  }
+
+  if (wxMessageBox(message, _("NAND Check"), wxYES_NO) != wxYES)
+    return;
+
+  if (WiiUtils::RepairNAND(ios))
+  {
+    wxMessageBox(_("The NAND has been repaired."), _("NAND Check"), wxOK | wxICON_INFORMATION);
+    return;
+  }
+
+  wxMessageBox(_("The NAND could not be repaired. It is recommended to back up "
+                 "your current data and start over with a fresh NAND."),
+               _("NAND Check"), wxOK | wxICON_ERROR);
+}
+
 void CFrame::OnExtractCertificates(wxCommandEvent& WXUNUSED(event))
 {
   DiscIO::NANDImporter().ExtractCertificates(File::GetUserPath(D_WIIROOT_IDX));
@@ -1594,6 +1647,7 @@ void CFrame::UpdateGUI()
   GetMenuBar()->FindItem(IDM_SAVE_STATE)->Enable(Initialized);
   // Misc
   GetMenuBar()->FindItem(IDM_CHANGE_DISC)->Enable(Initialized);
+  GetMenuBar()->FindItem(IDM_EJECT_DISC)->Enable(Initialized);
   GetMenuBar()
       ->FindItem(IDM_LOAD_GC_IPL_JAP)
       ->Enable(!Initialized && File::Exists(SConfig::GetInstance().GetBootROMPath(JAP_DIR)));
