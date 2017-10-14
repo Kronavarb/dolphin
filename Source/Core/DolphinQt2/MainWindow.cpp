@@ -41,7 +41,8 @@
 #include "DolphinQt2/AboutDialog.h"
 #include "DolphinQt2/Config/ControllersWindow.h"
 #include "DolphinQt2/Config/Graphics/GraphicsWindow.h"
-#include "DolphinQt2/Config/LoggerWidget.h"
+#include "DolphinQt2/Config/LogConfigWidget.h"
+#include "DolphinQt2/Config/LogWidget.h"
 #include "DolphinQt2/Config/Mapping/MappingWindow.h"
 #include "DolphinQt2/Config/SettingsWindow.h"
 #include "DolphinQt2/Host.h"
@@ -121,7 +122,10 @@ void MainWindow::ShutdownControllers()
 
 void MainWindow::InitCoreCallbacks()
 {
-  Core::SetOnStoppedCallback([this] { emit EmulationStopped(); });
+  connect(&Settings::Instance(), &Settings::EmulationStateChanged, this, [=](Core::State state) {
+    if (state == Core::State::Uninitialized)
+      OnStopComplete();
+  });
   installEventFilter(this);
   m_render_widget->installEventFilter(this);
 }
@@ -147,12 +151,8 @@ void MainWindow::CreateComponents()
   m_controllers_window = new ControllersWindow(this);
   m_settings_window = new SettingsWindow(this);
   m_hotkey_window = new MappingWindow(this, 0);
-  m_logger_widget = new LoggerWidget(this);
-
-  connect(this, &MainWindow::EmulationStarted, m_settings_window,
-          &SettingsWindow::EmulationStarted);
-  connect(this, &MainWindow::EmulationStopped, m_settings_window,
-          &SettingsWindow::EmulationStopped);
+  m_log_widget = new LogWidget(this);
+  m_log_config_widget = new LogConfigWidget(this);
 
 #if defined(HAVE_XRANDR) && HAVE_XRANDR
   m_graphics_window = new GraphicsWindow(
@@ -230,17 +230,9 @@ void MainWindow::ConnectMenuBar()
 
   connect(m_menu_bar, &MenuBar::ShowAboutDialog, this, &MainWindow::ShowAboutDialog);
 
-  connect(this, &MainWindow::EmulationStarted, m_menu_bar, &MenuBar::EmulationStarted);
-  connect(this, &MainWindow::EmulationPaused, m_menu_bar, &MenuBar::EmulationPaused);
-  connect(this, &MainWindow::EmulationStopped, m_menu_bar, &MenuBar::EmulationStopped);
   connect(m_game_list, &GameList::SelectionChanged, m_menu_bar, &MenuBar::SelectionChanged);
   connect(this, &MainWindow::ReadOnlyModeChanged, m_menu_bar, &MenuBar::ReadOnlyModeChanged);
   connect(this, &MainWindow::RecordingStatusChanged, m_menu_bar, &MenuBar::RecordingStatusChanged);
-
-  connect(this, &MainWindow::EmulationStarted, this,
-          [=]() { m_controllers_window->OnEmulationStateChanged(true); });
-  connect(this, &MainWindow::EmulationStopped, this,
-          [=]() { m_controllers_window->OnEmulationStateChanged(false); });
 }
 
 void MainWindow::ConnectHotkeys()
@@ -281,20 +273,14 @@ void MainWindow::ConnectToolBar()
   connect(m_tool_bar, &ToolBar::SettingsPressed, this, &MainWindow::ShowSettingsWindow);
   connect(m_tool_bar, &ToolBar::ControllersPressed, this, &MainWindow::ShowControllersWindow);
   connect(m_tool_bar, &ToolBar::GraphicsPressed, this, &MainWindow::ShowGraphicsWindow);
-
-  connect(this, &MainWindow::EmulationStarted, m_tool_bar, &ToolBar::EmulationStarted);
-  connect(this, &MainWindow::EmulationPaused, m_tool_bar, &ToolBar::EmulationPaused);
-  connect(this, &MainWindow::EmulationStopped, m_tool_bar, &ToolBar::EmulationStopped);
-
-  connect(this, &MainWindow::EmulationStopped, this, &MainWindow::OnStopComplete);
 }
 
 void MainWindow::ConnectGameList()
 {
   connect(m_game_list, &GameList::GameSelected, this, &MainWindow::Play);
   connect(m_game_list, &GameList::NetPlayHost, this, &MainWindow::NetPlayHost);
-  connect(this, &MainWindow::EmulationStarted, m_game_list, &GameList::EmulationStarted);
-  connect(this, &MainWindow::EmulationStopped, m_game_list, &GameList::EmulationStopped);
+
+  connect(m_game_list, &GameList::OpenGeneralSettings, this, &MainWindow::ShowGeneralWindow);
 }
 
 void MainWindow::ConnectRenderWidget()
@@ -310,7 +296,12 @@ void MainWindow::ConnectStack()
   m_stack->addWidget(m_game_list);
 
   setCentralWidget(m_stack);
-  addDockWidget(Qt::RightDockWidgetArea, m_logger_widget);
+
+  setTabPosition(Qt::LeftDockWidgetArea | Qt::RightDockWidgetArea, QTabWidget::North);
+  addDockWidget(Qt::RightDockWidgetArea, m_log_widget);
+  addDockWidget(Qt::RightDockWidgetArea, m_log_config_widget);
+
+  tabifyDockWidget(m_log_widget, m_log_config_widget);
 }
 
 void MainWindow::Open()
@@ -333,7 +324,6 @@ void MainWindow::Play()
   if (Core::GetState() == Core::State::Paused)
   {
     Core::SetState(Core::State::Running);
-    emit EmulationStarted();
   }
   else
   {
@@ -360,13 +350,12 @@ void MainWindow::Play()
 void MainWindow::Pause()
 {
   Core::SetState(Core::State::Paused);
-  emit EmulationPaused();
 }
 
 void MainWindow::OnStopComplete()
 {
   m_stop_requested = false;
-  m_render_widget->hide();
+  HideRenderWidget();
 
   if (m_exit_requested)
     QGuiApplication::instance()->quit();
@@ -438,7 +427,6 @@ bool MainWindow::RequestStop()
 void MainWindow::ForceStop()
 {
   BootManager::Stop();
-  HideRenderWidget();
 }
 
 void MainWindow::Reset()
@@ -450,8 +438,7 @@ void MainWindow::Reset()
 
 void MainWindow::FrameAdvance()
 {
-  Movie::DoFrameStep();
-  EmulationPaused();
+  Core::DoFrameStep();
 }
 
 void MainWindow::FullScreen()
@@ -496,7 +483,6 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
     return;
   }
   ShowRenderWidget();
-  emit EmulationStarted();
 
 #ifdef Q_OS_WIN
   // Prevents Windows from sleeping, turning off the display, or idling
@@ -566,10 +552,16 @@ void MainWindow::ShowAudioWindow()
   ShowSettingsWindow();
 }
 
+void MainWindow::ShowGeneralWindow()
+{
+  m_settings_window->SelectGeneralPane();
+  ShowSettingsWindow();
+}
+
 void MainWindow::ShowAboutDialog()
 {
-  AboutDialog* about = new AboutDialog(this);
-  about->show();
+  AboutDialog about{this};
+  about.exec();
 }
 
 void MainWindow::ShowHotkeyDialog()
@@ -673,7 +665,6 @@ void MainWindow::NetPlayInit()
           static_cast<void (MainWindow::*)(const QString&)>(&MainWindow::StartGame));
   connect(m_netplay_dialog, &NetPlayDialog::Stop, this, &MainWindow::RequestStop);
   connect(m_netplay_dialog, &NetPlayDialog::rejected, this, &MainWindow::NetPlayQuit);
-  connect(this, &MainWindow::EmulationStopped, m_netplay_dialog, &NetPlayDialog::EmulationStopped);
   connect(m_netplay_setup_dialog, &NetPlaySetupDialog::Join, this, &MainWindow::NetPlayJoin);
   connect(m_netplay_setup_dialog, &NetPlaySetupDialog::Host, this, &MainWindow::NetPlayHost);
 }
@@ -893,7 +884,7 @@ void MainWindow::OnImportNANDBackup()
                 .arg((QDateTime::currentDateTime().toMSecsSinceEpoch() - beginning) / 1000));
       });
     });
-    QueueOnObject(dialog, [dialog] { dialog->close(); });
+    QueueOnObject(dialog, &QProgressDialog::close);
   });
 
   dialog->exec();
